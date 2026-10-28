@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "cilia-nekrs: a GPU actuator-filament model of ciliary flow in nekRS"
+version: 0.1.0
+date-released: 2026-10-28
+license: MIT
+repository-code: "https://github.com/waseemshameer/cilia-nekrs"
+authors:
+  - family-names: Shameer
+    given-names: Waseem
+    orcid: "https://orcid.org/0000-0001-6268-0230"
+keywords:
+  - cilia
+  - nekRS
+  - spectral element
+  - GPU
+  - CFD

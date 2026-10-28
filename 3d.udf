@@ -1,0 +1,557 @@
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+#include <cmath>
+#include <algorithm>
+#include <mpi.h>
+#include "udf.hpp"
+
+// Actuator-filament cilia model: Fulford & Blake (1986) beat shape, resistive-force-theory drag,
+// Gaussian-regularised body force;
+// everything is non-dimensional with the cilium length L and beat period T = 1/f.
+
+// ---------------------------------------------------------------------------
+// Case parameters: read from [CASEDATA] in 3d.par (see readCaseData).
+// Defaults are the production values.
+// ---------------------------------------------------------------------------
+std::string coordinatesFile = "coordinates.txt"; // one cilium per line: x_root y_root beta
+int    N_p          = 20;         // panels per cilium
+dfloat slenderness  = 20.0;       // L/r, sets C_par = 2 pi/ln(L/r), C_perp = 2 C_par
+dfloat epsilon      = 0.1;        // Gaussian regularisation width
+dfloat rcutFactor   = 3.4;        // r_cut = rcutFactor * epsilon
+dfloat T_ramp       = 0.01;       // startup force ramp duration
+dfloat f_c          = 1.5915494;  // relaxation cut-off frequency, gamma = 2 pi f_c dt
+dfloat f_beat       = 1.0;        // beat frequency relative to the reference f
+dfloat L_c          = 1.0;        // cilium length relative to the reference L
+int    diagInterval = 1;          // steps between 'time ubar |V|max vals' lines
+dfloat wallPlaneZ   = 0.001;      // plane of the 'wall' line integrals, just above the wall
+int    profileCilia = 0;          // 1: time the udf parts (udfSource::*, udfExecuteStep::*), with device syncs
+
+// Derived at setup
+dfloat mu_hat;                    // non-dimensional viscosity (1/Re), from [FLUID VELOCITY]
+dfloat C_par, C_perp;             // RFT resistance constants
+dfloat l_panel;                   // panel length l = L_c/N_p
+dfloat epsinv2, rcut2, invnorm;   // Gaussian kernel constants
+dfloat xmin, ymin, Lx, Ly;        // periodic box in x and y, from the mesh
+
+// Cilia layout and force history
+int N_cilia = 0;
+int N_part = 0;                   // total panels, N_cilia * N_p
+std::vector<dfloat> xc, yc, beta_c;
+std::vector<dfloat> f_old;        // relaxed panel forces from the previous step
+bool restoreForceHistory = false;
+const std::string forceHistoryFile = "cilia_force_history.bin";
+
+// Fulford & Blake (1986) Fourier coefficients of the beat shape.
+// Stored column by column: entry [n*3 + (m-1)] is the s^m coefficient of harmonic n.
+// A1/B1 give xi_1 (along the beat direction), A2/B2 give xi_2 (wall-normal).
+const int N_o = 6;
+const dfloat A1[21] = {-0.449,-0.072,0.658, 0.130,-1.502,0.793, -0.169,0.260,-0.251, 0.063,-0.123,0.049, -0.050,0.011,0.009, -0.040,-0.009,0.023, -0.068,0.196,-0.111};
+const dfloat A2[21] = {2.076,-1.074,0.381, -0.003,-0.230,0.331, 0.054,-0.305,0.193, 0.007,-0.180,0.082, 0.026,-0.069,0.029, 0.022,0.001,0.002, 0.010,-0.080,0.048};
+const dfloat B1[18] = {-0.030,1.285,-1.034, -0.093,-0.036,0.050, 0.037,-0.244,0.143, 0.062,-0.093,0.043, 0.016,-0.137,0.098, -0.065,0.095,-0.054};
+const dfloat B2[18] = {0.080,-0.298,0.210, -0.044,0.513,-0.367, -0.017,0.004,0.009, 0.052,-0.222,0.120, 0.007,0.035,-0.024, 0.051,-0.128,0.102};
+
+// a_n(s) or b_n(s) = sum_{m=1..3} C_mn s^m; col is 1-based (col 1 = n=0 for A, n=1 for B)
+dfloat coeff(const dfloat* C, int col, dfloat s) {
+    int c = col - 1;
+    return C[c*3 + 0]*s + C[c*3 + 1]*s*s + C[c*3 + 2]*s*s*s;
+}
+
+// OCCA Device Buffers
+occa::memory o_xpc, o_f;
+occa::memory o_px, o_py, o_pz, o_upc;
+pointInterpolation_t* interp = nullptr;
+
+// Profiling: tags print in the runtime statistics via addUserStat. The device is synced at each
+// boundary so every part gets its own time; off by default because the syncs cost latency.
+void ptic(const std::string &tag) {
+  if (!profileCilia) return;
+  platform->device.finish();
+  platform->timer.tic(tag);
+}
+void ptoc(const std::string &tag) {
+  if (!profileCilia) return;
+  platform->device.finish();
+  platform->timer.toc(tag);
+}
+
+#ifdef __okl__
+@kernel void addCiliaForce(const dlong Nelements,
+                           const dlong fieldOffset,
+                           const int N_part,
+                           @restrict const dfloat *xpc,
+                           @restrict const dfloat *fpanel,
+                           const dfloat epsinv2,
+                           const dfloat rcut2,
+                           const dfloat invnorm,
+                           const dfloat Lx,
+                           const dfloat Ly,
+                           @restrict const dfloat *x,
+                           @restrict const dfloat *y,
+                           @restrict const dfloat *z,
+                           @restrict dfloat *FU) {
+
+  for(dlong e=0; e<Nelements; ++e; @outer(0)){
+    for(int n=0; n<p_Np; ++n; @inner(0)){
+      const dlong id = e*p_Np + n;
+      dfloat px = x[id], py = y[id], pz = z[id];
+
+      dfloat fx = 0.0, fy = 0.0, fz = 0.0;
+
+      for(int i=0; i<N_part; ++i){
+        // Truncate the Gaussian at r_cut, rejecting one direction at a time
+        dfloat dy = py - xpc[i*3 + 1];
+        dy -= Ly * floor(dy / Ly + 0.5);  // minimum image: the box is periodic in x and y
+        dfloat dy2 = dy * dy;
+        if (dy2 >= rcut2) continue;
+
+        dfloat dx = px - xpc[i*3 + 0];
+        dx -= Lx * floor(dx / Lx + 0.5);
+        dfloat dx2 = dx * dx;
+        dfloat rem = rcut2 - dy2;
+        if (dx2 >= rem) continue;
+
+        dfloat dz = pz - xpc[i*3 + 2];
+        dfloat dz2 = dz * dz;
+        rem = rem - dx2;
+        if (dz2 >= rem) continue;
+
+        dfloat r2 = dx2 + dy2 + dz2;
+        dfloat delta = exp(-r2 * epsinv2) * invnorm;
+
+        fx += fpanel[i*3 + 0] * delta;
+        fy += fpanel[i*3 + 1] * delta;
+        fz += fpanel[i*3 + 2] * delta;
+      }
+
+      FU[id + 0 * fieldOffset] += fx;
+      FU[id + 1 * fieldOffset] += fy;
+      FU[id + 2 * fieldOffset] += fz;
+    }
+  }
+}
+
+void udfDirichlet(bcData *bc) {
+  if (isField("fluid velocity")) {
+    bc->uxFluid = 0.0;
+    bc->uyFluid = 0.0;
+    bc->uzFluid = 0.0;
+  }
+}
+#endif
+
+void readCaseData() {
+  // nekRS lowercases keys and values when it reads the .par
+  platform->par->extract("casedata", "coordinatesfile", coordinatesFile);
+  platform->par->extract("casedata", "numpanels", N_p);
+  platform->par->extract("casedata", "slenderness", slenderness);
+  platform->par->extract("casedata", "gaussianwidth", epsilon);
+  platform->par->extract("casedata", "gaussiancutoff", rcutFactor);
+  platform->par->extract("casedata", "ramptime", T_ramp);
+  platform->par->extract("casedata", "relaxcutofffrequency", f_c);
+  platform->par->extract("casedata", "beatfrequency", f_beat);
+  platform->par->extract("casedata", "ciliumlength", L_c);
+  platform->par->extract("casedata", "diagnosticinterval", diagInterval);
+  platform->par->extract("casedata", "wallplanez", wallPlaneZ);
+  platform->par->extract("casedata", "profilecilia", profileCilia);
+
+  // Already converted by nekRS: viscosity = -Re in the .par gives 1/Re here
+  platform->options.getArgs("FLUID VISCOSITY", mu_hat);
+}
+
+void writeForceHistory(double time) {
+  if (platform->comm.mpiRank() != 0) return;
+  std::ofstream out(forceHistoryFile, std::ios::binary | std::ios::trunc);
+  out.write(reinterpret_cast<const char*>(&time), sizeof(time));
+  out.write(reinterpret_cast<const char*>(&N_part), sizeof(N_part));
+  out.write(reinterpret_cast<const char*>(f_old.data()), f_old.size() * sizeof(dfloat));
+}
+
+// After a restart, reload the relaxed forces so the relaxation transient does not restart.
+void readForceHistory(double time) {
+  int ok = 0;
+  double t_saved = 0.0;
+  if (platform->comm.mpiRank() == 0) {
+    std::ifstream in(forceHistoryFile, std::ios::binary);
+    int n_saved = -1;
+    if (in.good()) {
+      in.read(reinterpret_cast<char*>(&t_saved), sizeof(t_saved));
+      in.read(reinterpret_cast<char*>(&n_saved), sizeof(n_saved));
+    }
+    if (n_saved == N_part && std::abs(time - t_saved) <= 2.0 * nrs->dt[0] + 1e-12) {
+      in.read(reinterpret_cast<char*>(f_old.data()), f_old.size() * sizeof(dfloat));
+      ok = in.good() ? 1 : 0;
+    }
+    if (ok) {
+      std::cout << "cilia: restored force history from " << forceHistoryFile
+                << " (t = " << t_saved << ")\n";
+    } else {
+      std::cout << "cilia: WARNING no matching " << forceHistoryFile << " for restart at t = " << time
+                << "; relaxed forces restart from zero\n";
+    }
+  }
+  MPI_Bcast(&ok, 1, MPI_INT, 0, platform->comm.mpiComm());
+  if (ok) {
+    MPI_Bcast(f_old.data(), f_old.size(), MPI_DFLOAT, 0, platform->comm.mpiComm());
+  } else {
+    std::fill(f_old.begin(), f_old.end(), 0.0);
+  }
+}
+
+void userForcing(double time) {
+  if (N_part == 0) return;
+
+  if (restoreForceHistory) {
+    readForceHistory(time);
+    restoreForceHistory = false;
+  }
+
+  const dfloat pi = 4.0 * atan(1.0);
+  const dfloat omega = 2.0 * pi * f_beat;
+
+  ptic("udfSource::kinematics");
+  // Panel positions x_pc and prescribed velocities V_cilia (Fulford-Blake beat)
+  std::vector<dfloat> px(N_part, 0.0), py(N_part, 0.0), pz(N_part, 0.0);
+  std::vector<dfloat> x_pc(N_part * 3, 0.0);
+  std::vector<dfloat> V_cilia(N_part * 3, 0.0);
+
+  int n = 0;
+  for(int k=0; k<N_cilia; k++) {
+    for(int i=0; i<N_p; i++) {
+      dfloat s = (dfloat)(i + 0.5) / (dfloat)N_p;
+
+      dfloat xi1 = 0.5 * coeff(A1, 1, s);
+      dfloat xi2 = 0.5 * coeff(A2, 1, s);
+      dfloat dxi1 = 0.0, dxi2 = 0.0;
+
+      for(int j=1; j<=N_o; j++){
+        dfloat wt = j * omega * time;
+        xi1 += coeff(A1, j+1, s)*cos(wt) + coeff(B1, j, s)*sin(wt);
+        dxi1 -= (j*omega)*coeff(A1, j+1, s)*sin(wt) - (j*omega)*coeff(B1, j, s)*cos(wt);
+
+        xi2 += coeff(A2, j+1, s)*cos(wt) + coeff(B2, j, s)*sin(wt);
+        dxi2 -= (j*omega)*coeff(A2, j+1, s)*sin(wt) - (j*omega)*coeff(B2, j, s)*cos(wt);
+      }
+
+      // Scale by cilium length, rotate the beat plane by beta about z
+      px[n] = L_c * xi1 * cos(beta_c[k]) + xc[k];
+      py[n] = L_c * xi1 * sin(beta_c[k]) + yc[k];
+      pz[n] = L_c * xi2;
+
+      x_pc[n*3 + 0] = px[n];
+      x_pc[n*3 + 1] = py[n];
+      x_pc[n*3 + 2] = pz[n];
+
+      V_cilia[n*3 + 0] = L_c * dxi1 * cos(beta_c[k]);
+      V_cilia[n*3 + 1] = L_c * dxi1 * sin(beta_c[k]);
+      V_cilia[n*3 + 2] = L_c * dxi2;
+
+      n++;
+    }
+  }
+
+  // Wrap into the periodic box so panels that leave through a side are found on the other side
+  // (x_pc stays unwrapped for the tangents; the force kernel uses minimum-image distances)
+  for (int m = 0; m < N_part; ++m) {
+    px[m] -= Lx * std::floor((px[m] - xmin) / Lx);
+    py[m] -= Ly * std::floor((py[m] - ymin) / Ly);
+  }
+  ptoc("udfSource::kinematics");
+
+  ptic("udfSource::copyPoints");
+  o_px.copyFrom(px.data());
+  o_py.copyFrom(py.data());
+  o_pz.copyFrom(pz.data());
+  ptoc("udfSource::copyPoints");
+
+  ptic("udfSource::find");
+  interp->setPoints(o_px, o_py, o_pz);
+  interp->find();
+  ptoc("udfSource::find");
+
+  // Fluid velocity at panel centres; -999.0 marks points that could not be located
+  ptic("udfSource::eval");
+  std::vector<dfloat> u_pc(N_part * 3, -999.0);
+  o_upc.copyFrom(u_pc.data());
+  interp->eval(nrs->meshV->dim, nrs->fluid->fieldOffset, nrs->fluid->o_U, N_part, o_upc, N_part);
+  o_upc.copyTo(u_pc.data());
+  ptoc("udfSource::eval");
+
+  ptic("udfSource::panelForce");
+
+  // Ramp R(t) and relaxation gamma = 2 pi f_c dt (dt-independent filter)
+  const dfloat R = std::min((dfloat)1.0, (dfloat)(time / T_ramp));
+  const dfloat gamma_relax = std::min((dfloat)1.0, (dfloat)(2.0 * pi * f_c * nrs->dt[0]));
+
+  std::vector<dfloat> f(N_part * 3, 0.0);
+
+  for(int k=0; k<N_cilia; k++) {
+    for(int i=0; i<N_p; i++) {
+      int idx = k * N_p + i;
+      int idxm = (i == 0) ? idx : idx - 1;
+      int idxp = (i == N_p - 1) ? idx : idx + 1;
+
+      // Unit tangent t: centred differences inside, one-sided at the ends
+      dfloat tx = x_pc[idxp*3 + 0] - x_pc[idxm*3 + 0];
+      dfloat ty = x_pc[idxp*3 + 1] - x_pc[idxm*3 + 1];
+      dfloat tz = x_pc[idxp*3 + 2] - x_pc[idxm*3 + 2];
+      dfloat tnorm = sqrt(tx*tx + ty*ty + tz*tz);
+
+      if(tnorm > 1.0e-14) { tx /= tnorm; ty /= tnorm; tz /= tnorm; }
+      else { tx = 0.0; ty = 0.0; tz = 0.0; }
+
+      // V_rel = V_cilia - u(x_pc); zero for lost points
+      dfloat Vx = 0.0, Vy = 0.0, Vz = 0.0;
+      dfloat ux = u_pc[idx + 0 * N_part];
+      dfloat uy = u_pc[idx + 1 * N_part];
+      dfloat uz = u_pc[idx + 2 * N_part];
+
+      if (ux != -999.0 || uy != -999.0 || uz != -999.0) {
+          Vx = V_cilia[idx*3 + 0] - ux;
+          Vy = V_cilia[idx*3 + 1] - uy;
+          Vz = V_cilia[idx*3 + 2] - uz;
+      }
+
+      dfloat V_dot_t = Vx*tx + Vy*ty + Vz*tz;
+      dfloat Vparx = V_dot_t * tx, Vpary = V_dot_t * ty, Vparz = V_dot_t * tz;
+      dfloat Vperpx = Vx - Vparx,  Vperpy = Vy - Vpary,  Vperpz = Vz - Vparz;
+
+      // f* = R(t) mu l (C_par V_par + C_perp V_perp), the force the panel exerts on the fluid
+      dfloat scale = R * mu_hat * l_panel;
+      dfloat fstar_x = scale * (C_par*Vparx + C_perp*Vperpx);
+      dfloat fstar_y = scale * (C_par*Vpary + C_perp*Vperpy);
+      dfloat fstar_z = scale * (C_par*Vparz + C_perp*Vperpz);
+
+      f[idx*3 + 0] = (1.0 - gamma_relax) * f_old[idx*3 + 0] + gamma_relax * fstar_x;
+      f[idx*3 + 1] = (1.0 - gamma_relax) * f_old[idx*3 + 1] + gamma_relax * fstar_y;
+      f[idx*3 + 2] = (1.0 - gamma_relax) * f_old[idx*3 + 2] + gamma_relax * fstar_z;
+
+      f_old[idx*3 + 0] = f[idx*3 + 0];
+      f_old[idx*3 + 1] = f[idx*3 + 1];
+      f_old[idx*3 + 2] = f[idx*3 + 2];
+    }
+  }
+
+  ptoc("udfSource::panelForce");
+
+  ptic("udfSource::copyForces");
+  o_xpc.copyFrom(x_pc.data());
+  o_f.copyFrom(f.data());
+  ptoc("udfSource::copyForces");
+
+  ptic("udfSource::addCiliaForce");
+  addCiliaForce(nrs->meshV->Nelements, nrs->fluid->fieldOffset, N_part,
+                   o_xpc, o_f, epsinv2, rcut2, invnorm, Lx, Ly,
+                   nrs->meshV->o_x, nrs->meshV->o_y, nrs->meshV->o_z,
+                   nrs->fluid->o_explicitTerms());
+  ptoc("udfSource::addCiliaForce");
+}
+
+// ---------------------------------------------------------------------------
+// Plane integrals for the 'wall' line, replacing the ParaView slice + IntegrateVariables pass.
+// On the genbox mesh (axis-aligned elements, local i -> x, j -> y, k -> z) the integral of f over
+// z = z0 is sum_n W[n] f[n] with W = w_i w_j (dx dy / 4) l_k(r0) for nodes of the element layer
+// holding z0 (r0 = 2 (z0 - zmin)/dz - 1). Using l_k'(r0) 2/dz instead gives the integral of df/dz.
+// Both are exact spectral interpolation; each integral is one innerProd on the device.
+// ---------------------------------------------------------------------------
+occa::memory o_Wplane, o_WplaneDz, o_Wwall, o_WwallDz;
+dfloat planeArea = 0;
+
+void setupPlaneWeights(dfloat z0, occa::memory &o_W, occa::memory &o_WDz, dfloat &area) {
+  auto mesh = nrs->meshV;
+  const int Nq = mesh->Nq;
+  const dfloat *r = mesh->gllz, *w = mesh->gllw;
+  auto [x, y, z] = mesh->xyzHost();
+  std::vector<dfloat> W(mesh->Nlocal, 0.0), WDz(mesh->Nlocal, 0.0);
+  std::vector<dfloat> l(Nq), dl(Nq);
+  const dfloat tol = 1e-8;
+  double a = 0;
+  for (dlong e = 0; e < mesh->Nelements; ++e) {
+    const dlong o = e * mesh->Np;
+    const dfloat zmin = z[o], zmax = z[o + (Nq - 1) * Nq * Nq];
+    if (!(zmin - tol <= z0 && z0 < zmax - tol)) continue;
+    const dfloat dx = x[o + Nq - 1] - x[o], dy = y[o + (Nq - 1) * Nq] - y[o], dz = zmax - zmin;
+    for (int n = 0; n < mesh->Np; ++n) {  // assumes the genbox layout described above
+      const int i = n % Nq, j = (n / Nq) % Nq, k = n / (Nq * Nq);
+      if (std::abs(x[o + n] - (x[o] + dx * (r[i] + 1) / 2)) > tol * (1 + std::abs(x[o])) ||
+          std::abs(y[o + n] - (y[o] + dy * (r[j] + 1) / 2)) > tol * (1 + std::abs(y[o])) ||
+          std::abs(z[o + n] - (zmin + dz * (r[k] + 1) / 2)) > tol * (1 + std::abs(zmin))) {
+        printf("[ERROR] wall integrals need axis-aligned genbox elements (element %d)\n", (int)e);
+        std::abort();
+      }
+    }
+    const dfloat r0 = 2 * (z0 - zmin) / dz - 1;
+    for (int k = 0; k < Nq; ++k) {  // Lagrange basis l_k and its derivative at r0
+      l[k] = 1; dl[k] = 0;
+      for (int b = 0; b < Nq; ++b) if (b != k) l[k] *= (r0 - r[b]) / (r[k] - r[b]);
+      for (int c = 0; c < Nq; ++c) {
+        if (c == k) continue;
+        dfloat term = 1 / (r[k] - r[c]);
+        for (int b = 0; b < Nq; ++b) if (b != k && b != c) term *= (r0 - r[b]) / (r[k] - r[b]);
+        dl[k] += term;
+      }
+    }
+    for (int n = 0; n < mesh->Np; ++n) {
+      const int i = n % Nq, j = (n / Nq) % Nq, k = n / (Nq * Nq);
+      const dfloat wxy = w[i] * w[j] * dx * dy / 4;
+      W[o + n] = wxy * l[k];
+      WDz[o + n] = wxy * dl[k] * 2 / dz;
+      a += wxy * l[k];
+    }
+  }
+  MPI_Allreduce(MPI_IN_PLACE, &a, 1, MPI_DOUBLE, MPI_SUM, platform->comm.mpiComm());
+  area = a;
+  o_W = platform->device.malloc(mesh->Nlocal * sizeof(dfloat));
+  o_WDz = platform->device.malloc(mesh->Nlocal * sizeof(dfloat));
+  o_W.copyFrom(W.data(), mesh->Nlocal * sizeof(dfloat));
+  o_WDz.copyFrom(WDz.data(), mesh->Nlocal * sizeof(dfloat));
+}
+
+// One 'vals' and one 'wall' line per call, on rank 0 (gate.py reads both)
+void printDiagnostics(double time) {
+  auto mesh = nrs->meshV;
+  auto comm = platform->comm.mpiComm();
+
+  const dfloat ubar = platform->linAlg->innerProd(mesh->Nlocal, nrs->fluid->o_U, mesh->o_Jw, comm) / mesh->volume;
+
+  poolDeviceMemory<dfloat> o_magV(mesh->Nlocal);
+  platform->linAlg->magVector(mesh->Nlocal, nrs->fluid->fieldOffset, nrs->fluid->o_U, o_magV);
+  const dfloat Vmax = platform->linAlg->max(mesh->Nlocal, o_magV, comm);
+
+  // Plane integrals in code units (tau = du/dz, no mu)
+  const auto off = nrs->fluid->fieldOffset;
+  const auto &o_U = nrs->fluid->o_U, &o_P = nrs->fluid->o_P;
+  const dfloat Iu    = platform->linAlg->innerProd(mesh->Nlocal, o_U, o_Wplane, comm, 0);
+  const dfloat Iv    = platform->linAlg->innerProd(mesh->Nlocal, o_U, o_Wplane, comm, off);
+  const dfloat Ip    = platform->linAlg->innerProd(mesh->Nlocal, o_P, o_Wplane, comm);
+  const dfloat Iudz  = platform->linAlg->innerProd(mesh->Nlocal, o_U, o_WplaneDz, comm, 0);
+  const dfloat Ivdz  = platform->linAlg->innerProd(mesh->Nlocal, o_U, o_WplaneDz, comm, off);
+  const dfloat Ipw   = platform->linAlg->innerProd(mesh->Nlocal, o_P, o_Wwall, comm);
+  const dfloat Iudzw = platform->linAlg->innerProd(mesh->Nlocal, o_U, o_WwallDz, comm, 0);
+  const dfloat Ivdzw = platform->linAlg->innerProd(mesh->Nlocal, o_U, o_WwallDz, comm, off);
+
+  if (platform->comm.mpiRank() == 0) {
+    printf("%.10e %.10e %.10e  vals\n", time, ubar, Vmax);
+    // time | z = wallPlaneZ: int u, int v, int p, int du/dz, int dv/dz | z = 0: int p, int du/dz, int dv/dz
+    printf("%.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e  wall\n",
+           time, Iu, Iv, Ip, Iudz, Ivdz, Ipw, Iudzw, Ivdzw);
+  }
+}
+
+void UDF_Setup() {
+  int rank;
+  MPI_Comm_rank(platform->comm.mpiComm(), &rank);
+
+  readCaseData();
+
+  if(rank == 0) {
+    std::ifstream infile(coordinatesFile);
+    if (!infile.good()) {
+        std::cerr << "\n[ERROR] " << coordinatesFile << " not found!\n" << std::endl;
+    } else {
+        // First three columns are x_root y_root beta; extra columns are ignored
+        std::string line;
+        while (std::getline(infile, line)) {
+          std::istringstream ls(line);
+          dfloat x, y, b;
+          if (!(ls >> x >> y >> b)) continue;
+          xc.push_back(x);
+          yc.push_back(y);
+          beta_c.push_back(b);
+          N_cilia++;
+        }
+    }
+  }
+
+  MPI_Bcast(&N_cilia, 1, MPI_INT, 0, platform->comm.mpiComm());
+  if(rank != 0) {
+    xc.resize(N_cilia); yc.resize(N_cilia); beta_c.resize(N_cilia);
+  }
+  MPI_Bcast(xc.data(), N_cilia, MPI_DFLOAT, 0, platform->comm.mpiComm());
+  MPI_Bcast(yc.data(), N_cilia, MPI_DFLOAT, 0, platform->comm.mpiComm());
+  MPI_Bcast(beta_c.data(), N_cilia, MPI_DFLOAT, 0, platform->comm.mpiComm());
+
+  N_part = N_cilia * N_p;
+
+  const dfloat pi = 4.0 * atan(1.0);
+  C_par  = 2.0 * pi / log(slenderness);
+  C_perp = 4.0 * pi / log(slenderness);
+  l_panel = L_c / N_p;
+  epsinv2 = 1.0 / (epsilon * epsilon);
+  rcut2   = (rcutFactor * epsilon) * (rcutFactor * epsilon);
+  invnorm = 1.0 / (epsilon * epsilon * epsilon * pow(pi, 1.5));
+
+  auto mesh = nrs->meshV;
+  xmin = platform->linAlg->min(mesh->Nlocal, mesh->o_x, platform->comm.mpiComm());
+  ymin = platform->linAlg->min(mesh->Nlocal, mesh->o_y, platform->comm.mpiComm());
+  Lx = platform->linAlg->max(mesh->Nlocal, mesh->o_x, platform->comm.mpiComm()) - xmin;
+  Ly = platform->linAlg->max(mesh->Nlocal, mesh->o_y, platform->comm.mpiComm()) - ymin;
+  if (2 * rcutFactor * epsilon >= std::min(Lx, Ly)) {
+    if (rank == 0) printf("[ERROR] r_cut must be below half the box for the minimum image\n");
+    std::abort();
+  }
+
+  if (rank == 0) {
+    printf("cilia: coordinatesFile = %s  (N_cilia = %d, N_part = %d)\n", coordinatesFile.c_str(), N_cilia, N_part);
+    printf("cilia: N_p = %d  l = %g  L/r = %g  C_par = %g  C_perp = %g  mu = %g\n",
+           N_p, l_panel, slenderness, C_par, C_perp, mu_hat);
+    printf("cilia: periodic box x = [%g, %g], y = [%g, %g]\n", xmin, xmin + Lx, ymin, ymin + Ly);
+    printf("cilia: epsilon = %g  r_cut = %g epsilon  T_ramp = %g  f_c = %g  f_beat = %g  L_c = %g\n",
+           epsilon, rcutFactor, T_ramp, f_c, f_beat, L_c);
+  }
+
+  f_old.assign(N_part * 3, 0.0);
+
+  if (N_part > 0) {
+      o_xpc = platform->device.malloc(N_part * 3 * sizeof(dfloat));
+      o_f   = platform->device.malloc(N_part * 3 * sizeof(dfloat));
+      o_px  = platform->device.malloc(N_part * sizeof(dfloat));
+      o_py  = platform->device.malloc(N_part * sizeof(dfloat));
+      o_pz  = platform->device.malloc(N_part * sizeof(dfloat));
+      o_upc = platform->device.malloc(N_part * 3 * sizeof(dfloat));
+  }
+
+  if (platform->options.getArgs("RESTART FILE NAME").empty()) {
+    std::vector<dfloat> U(nrs->meshV->dim * nrs->fluid->fieldOffset, 0.0);
+    nrs->fluid->o_U.copyFrom(U.data(), U.size());
+  } else {
+    restoreForceHistory = true;
+  }
+
+  nrs->userSource = &userForcing;
+  interp = new pointInterpolation_t(nrs->meshV, platform->comm.mpiComm());
+
+  dfloat wallArea;
+  setupPlaneWeights(wallPlaneZ, o_Wplane, o_WplaneDz, planeArea);
+  setupPlaneWeights(0.0, o_Wwall, o_WwallDz, wallArea);
+  if (profileCilia) {
+    platform->timer.addUserStat("udfSource");
+    platform->timer.addUserStat("udfExecuteStep");
+    if (rank == 0) printf("cilia: profileCilia = 1 (udf timers with device syncs)\n");
+  }
+
+  if (rank == 0) printf("cilia: wall line: plane z = %g (area %.8g), wall z = 0 (area %.8g)\n", wallPlaneZ, planeArea, wallArea);
+}
+
+void UDF_ExecuteStep(double time, int tstep) {
+  if (diagInterval > 0 && tstep % diagInterval == 0) {
+    ptic("udfExecuteStep::diagnostics");
+    printDiagnostics(time);
+    ptoc("udfExecuteStep::diagnostics");
+  }
+
+  // FORCE STEP 0 WRITE FIX:
+  // This explicitly creates 3d0.f00000 (with mesh coordinates) at t=0.
+  // It fixes the indexing gap and aligns your files with visnek's expectations.
+  if (tstep == 0) {
+    nrs->copyToNek(time, tstep);
+    nek::userchk();
+    nrs->writeCheckpoint(time, true); // true = enforce OutXYZ
+  } else if (nrs->checkpointStep) {
+    nrs->copyToNek(time, tstep);
+    nek::userchk();
+    writeForceHistory(time);
+  }
+}

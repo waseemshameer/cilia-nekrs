@@ -1,0 +1,38 @@
+userSections = CASEDATA
+
+[GENERAL]
+stopAt = endTime
+endTime = 0.1
+dt = 1.0e-4
+timeStepper = bdf2
+udf = ../../3d.udf      # the shared udf at the repo root
+polynomialOrder = 5
+
+checkpointControl = simulationtime
+checkpointInterval = 0.01
+
+[PROBLEMTYPE]
+equation = navierstokes
+
+[FLUID PRESSURE]
+residualTol = 1.0e-4
+
+[FLUID VELOCITY]
+residualTol = 1.0e-4
+density = 1.0
+viscosity = -1.0e-3      # negative = Re; the cilia drag uses this mu = 1/Re too
+
+# Cilia model (read by 3d.udf; units of L and T = 1/f).
+# Any key left out falls back to the value shown (the udf default).
+# nekRS lowercases values, so keep the coordinates filename lowercase.
+[CASEDATA]
+coordinatesFile      = coordinates_small4.txt # x_root y_root beta per cilium
+numPanels            = 20                # N_p
+slenderness          = 20                # L/r -> C_par = 2pi/ln(L/r), C_perp = 2 C_par
+gaussianWidth        = 0.1               # epsilon
+gaussianCutoff       = 3.4               # r_cut / epsilon
+rampTime             = 0.01              # T_ramp
+relaxCutoffFrequency = 1.5915494         # f_c (= 1.59); gamma = 2 pi f_c dt = 1e-3 at dt = 1e-4
+beatFrequency        = 1.0               # f / f_ref
+ciliumLength         = 1.0               # L_c / L
+diagnosticInterval   = 1                 # steps between 'time ubar |V|max vals' lines
