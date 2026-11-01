@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # Accuracy gate: compare a run against a small4 reference over cycle 2 (t in [1, 2]).
-#   python3 gate.py <run .out> [--truth | --ref <ref .out>] [--window T0 T1] [--tol 1e-3]
-# Default reference: the production baseline (small4, N = 5, dt = 1e-4, NS), i.e. "did the change move the answer".
-# --truth compares against N = 7, dt = 1e-5 instead (for changes to the discretisation; production itself is
-# 0.18% off there on int p, mostly N, see docs/case.md).
+#   python3 gate.py <run .out> [--ref <ref .out>] [--window T0 T1] [--tol 1e-3]
+# Default reference: cases/small4/m8_reference_gauss2.out (production model at dt 1e-4, couplingTol 1e-5, solver tol 1e-4),
+# i.e. "did the change move the answer".
 # Reads the udf 'vals' and 'wall' lines. Per metric: max |run - ref| / max |ref| over the window.
 # Both series are compared on the coarser of the two time grids (np.interp onto those times).
+# --per-area A divides the run's wall integrals by A (A = k^2 for a k x k tiled case vs small4; ubar, |V|max are intensive).
 # |V|max jumps between nodes, so it is gated on its cycle integral; the pointwise max is printed as info.
 import argparse, os, sys
 import numpy as np
@@ -13,12 +13,11 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 p = argparse.ArgumentParser()
 p.add_argument('run')
-p.add_argument('--ref', default=os.path.join(HERE, 'cases', 'small4', 'p02_reference.out'))
-p.add_argument('--truth', action='store_true', help='use cases/small4/p02_truth.out as the reference')
+p.add_argument('--ref', default=os.path.join(HERE, 'cases', 'small4', 'm8_reference_gauss2.out'))  # references for earlier model versions are not shipped
 p.add_argument('--window', nargs=2, type=float, default=[1.0, 2.0])
 p.add_argument('--tol', type=float, default=1e-3)
+p.add_argument('--per-area', type=float, default=1.0, help='divide the run wall integrals by this area ratio')
 a = p.parse_args()
-if a.truth: a.ref = os.path.join(HERE, 'cases', 'small4', 'p02_truth.out')
 T0, T1 = a.window
 
 # name, line tag, column (after time), gated pointwise
@@ -47,6 +46,7 @@ def window(t):
     return (t >= T0 - 1e-9) & (t <= T1 + 1e-9)
 
 run, ref = read(a.run), read(a.ref)
+run['wall'][:, 1:] /= a.per_area
 print('gate: %s\n  ref: %s\n  window t in [%g, %g], tol %.2g of peak\n' % (a.run, a.ref, T0, T1, a.tol))
 print('%-22s %14s %14s %8s' % ('metric', 'max|diff|/peak', 'rel cycle int', 'result'))
 ok = True

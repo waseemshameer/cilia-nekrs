@@ -21,13 +21,54 @@ int    N_p          = 20;         // panels per cilium
 dfloat slenderness  = 20.0;       // L/r, sets C_par = 2 pi/ln(L/r), C_perp = 2 C_par
 dfloat epsilon      = 0.1;        // Gaussian regularisation width
 dfloat rcutFactor   = 3.4;        // r_cut = rcutFactor * epsilon
+// M.8: spreading blob. gauss: exp(-r^2/eps^2)/(pi^1.5 eps^3); its flow is (1 + eps^2/4 lap) S F + exp. small, an
+// O(eps^2/d^3) potential-dipole error in every interaction at distance d (wall image of the own cilium, neighbours),
+// which gives the first-order eps error of M.2/M.7. gauss2: (5/2 - r^2/eps^2) x gauss = (1 - eps^2/4 lap) gauss, zero
+// second moment: the flow is S F up to exponentially small terms beyond a few eps
+std::string gaussianKernel = "gauss";
+int kernel2 = 0;
 dfloat T_ramp       = 0.01;       // startup force ramp duration
 dfloat f_c          = 1.5915494;  // relaxation cut-off frequency, gamma = 2 pi f_c dt
+std::string relaxScheme = "cn";  // relaxation update: cn (Crank-Nicolson, second order; default since P1.2), euler (first order, pre-P1.2 runs) or none (f = f*, i.e. f_c = inf; M.4)
 dfloat f_beat       = 1.0;        // beat frequency relative to the reference f
 dfloat L_c          = 1.0;        // cilium length relative to the reference L
 int    diagInterval = 1;          // steps between 'time ubar |V|max vals' lines
 dfloat wallPlaneZ   = 0.001;      // plane of the 'wall' line integrals, just above the wall
 int    profileCilia = 0;          // 1: time the udf parts (udfSource::*, udfExecuteStep::*), with device syncs
+// M.3 rod test: kinematics = rod replaces the beat by a straight rigid rod of length L_c centred at
+// (x_root, y_root, rodCentreZ) along rodAxis, with virtual velocity 1 along rodVelocity (it does not move)
+std::string kinematics = "fb";    // fb (Fulford-Blake beat) or rod
+std::string rodAxis = "z";        // x, y or z
+std::string rodVelocity = "x";    // x, y or z
+dfloat rodCentreZ = 0.5;
+// M.3: 1 subtracts each cilium's own free-space regularised-Stokeslet velocity from u at its panels
+// (RFT's ln(L/r) already holds the filament's own flow; sampling u counts it twice, ~half the drag lost)
+// M.6: 2 subtracts the self-flow of the force being computed, f = C (V - u + S f), solved per cilium as
+// (I - C S) f = C (V - u): the same model to O(dt^k) (u holds the flow of the EXT force, f(t_n) + O(dt^k)),
+// but the subtraction is no longer an explicit positive-feedback loop (gain C S ~ 0.9, unstable with f = f*)
+int    subtractSelfFlow = 0;
+// M.5: panel length and tangent. uniform: l = L_c/N_p, tangent by finite differences of the panel centres (the
+// Nek5000 model; FB is not inextensible, so this integrates the drag over the beat parameter s, not arclength:
+// ~8% off in net force). arclength: l_i = L_c |dxi/ds(s_i)| / N_p and the analytic tangent (midpoint rule of the
+// RFT line integral over the actual curve)
+std::string panelLength = "uniform";
+// M.6: >0 prints one 'panel' line per panel for the first dumpPanelSteps calls of userForcing (rank 0):
+// call time k i, f*, applied force sum_h c_h f_h (next solve), raw u, subtracted self-flow, V_cilia
+int    dumpPanelSteps = 0;
+// M.6: coupling of the panel forces and the flow. explicit: one solve per step, the force from u^n enters the
+// solve through o_EXT (EXT-extrapolated; needs the relaxation filter, f = f* is unstable: M.6 session 1).
+// iqn: outer correctors per step (nekRS userConvergenceCheck) with interface quasi-Newton (IQN-ILS, Degroote 2009,
+// as in preCICE): F^k at x(t_{n+1}) -> solve -> f* = C (V - u^k + S F^k) -> IQN update of F, until
+// |f* - F| <= couplingTol |f*|; the converged F is the implicit f = f* model (needs relaxScheme = none)
+std::string couplingScheme = "explicit";
+dfloat couplingTol = 1e-4;        // relative 2-norm residual |f* - F| / |f*| over all panels
+int    couplingMaxIter = 50;      // correctors per step; a step that hits it is counted and the last F is kept
+dfloat couplingOmega = 0.2;       // under-relaxation of the first update when there are no secant pairs yet
+int    couplingReuse = 8;         // IQN-ILS(q): keep the secant pairs of the last q steps
+dfloat couplingFilter = 1e-3;     // QR filter: drop a secant column whose orthogonal part is < filter * its norm
+bool   couplingIQN = false;
+int    iqnVerbose = 0;            // P1.14: 1 prints the residual of every corrector ('iqnres' lines: time, corrector, |f* - F|/|f*|)
+int    forcingCalls = 0;
 
 // Derived at setup
 dfloat mu_hat;                    // non-dimensional viscosity (1/Re), from [FLUID VELOCITY]
@@ -41,6 +82,13 @@ int N_cilia = 0;
 int N_part = 0;                   // total panels, N_cilia * N_p
 std::vector<dfloat> xc, yc, beta_c;
 std::vector<dfloat> f_old;        // relaxed panel forces from the previous step
+std::vector<dfloat> fstar_old;    // unrelaxed panel forces f* from the previous step (cn only)
+// M.3 self-flow: nekRS extrapolates the udf source (o_EXT) with the EXT coefficients, so the u sampled now was
+// driven by sum_i c_i f_i, f_i = the forces of the last calls (i = 0 newest), spread at positions x_i
+std::vector<std::vector<dfloat>> f_hist, x_hist;   // empty until the first step
+std::vector<dfloat> c_hist;       // EXT coefficients of the step that produced u
+bool relaxCN = false;
+bool relaxNone = false;          // M.4: no relaxation, f = f*
 bool restoreForceHistory = false;
 const std::string forceHistoryFile = "cilia_force_history.bin";
 
@@ -57,6 +105,11 @@ const dfloat B2[18] = {0.080,-0.298,0.210, -0.044,0.513,-0.367, -0.017,0.004,0.0
 dfloat coeff(const dfloat* C, int col, dfloat s) {
     int c = col - 1;
     return C[c*3 + 0]*s + C[c*3 + 1]*s*s + C[c*3 + 2]*s*s*s;
+}
+// d/ds of coeff
+dfloat dcoeff(const dfloat* C, int col, dfloat s) {
+    int c = col - 1;
+    return C[c*3 + 0] + 2.0*C[c*3 + 1]*s + 3.0*C[c*3 + 2]*s*s;
 }
 
 // OCCA Device Buffers
@@ -86,11 +139,14 @@ void ptoc(const std::string &tag) {
                            const dfloat epsinv2,
                            const dfloat rcut2,
                            const dfloat invnorm,
+                           const int kernel2,
                            const dfloat Lx,
                            const dfloat Ly,
                            @restrict const dfloat *x,
                            @restrict const dfloat *y,
                            @restrict const dfloat *z,
+                           const int useJw,
+                           @restrict const dfloat *Jw,
                            @restrict dfloat *FU) {
 
   for(dlong e=0; e<Nelements; ++e; @outer(0)){
@@ -120,15 +176,70 @@ void ptoc(const std::string &tag) {
 
         dfloat r2 = dx2 + dy2 + dz2;
         dfloat delta = exp(-r2 * epsinv2) * invnorm;
+        if (kernel2) delta *= 2.5 - r2 * epsinv2;   // M.8 gauss2
 
         fx += fpanel[i*3 + 0] * delta;
         fy += fpanel[i*3 + 1] * delta;
         fz += fpanel[i*3 + 2] * delta;
       }
 
+      // M.6 iqn: FU is o_JwF (the assembled rhs), which holds the mass matrix Jw times the force
+      if (useJw) {
+        const dfloat w = Jw[id];
+        fx *= w; fy *= w; fz *= w;
+      }
+
       FU[id + 0 * fieldOffset] += fx;
       FU[id + 1 * fieldOffset] += fy;
       FU[id + 2 * fieldOffset] += fz;
+    }
+  }
+}
+
+// P1.4: all diagnostics in one pass, one partial result per element (printDiagnostics sums them).
+// out[e*10 + q]: q = 0 int u dV, 1..8 the 'wall' integrals (printDiagnostics order), 9 max |V|.
+@kernel void diagReduce(const dlong Nelements,
+                        const dlong fieldOffset,
+                        @restrict const dfloat *Jw,
+                        @restrict const dfloat *U,
+                        @restrict const dfloat *P,
+                        @restrict const dfloat *Wp,
+                        @restrict const dfloat *WpDz,
+                        @restrict const dfloat *Ww,
+                        @restrict const dfloat *WwDz,
+                        @restrict dfloat *out) {
+
+  for(dlong e=0; e<Nelements; ++e; @outer(0)){
+    @shared dfloat s[10][p_Nq * p_Nq];
+
+    for(int ij=0; ij<p_Nq*p_Nq; ++ij; @inner(0)){
+      dfloat a[10];
+      for(int q=0; q<10; ++q) a[q] = 0.0;
+      for(int k=0; k<p_Nq; ++k){
+        const dlong id = e*p_Np + k*p_Nq*p_Nq + ij;
+        const dfloat u = U[id], v = U[id + fieldOffset], w = U[id + 2*fieldOffset], p = P[id];
+        a[0] += Jw[id] * u;
+        a[1] += Wp[id] * u;
+        a[2] += Wp[id] * v;
+        a[3] += Wp[id] * p;
+        a[4] += WpDz[id] * u;
+        a[5] += WpDz[id] * v;
+        a[6] += Ww[id] * p;
+        a[7] += WwDz[id] * u;
+        a[8] += WwDz[id] * v;
+        a[9] = fmax(a[9], sqrt(u*u + v*v + w*w));
+      }
+      for(int q=0; q<10; ++q) s[q][ij] = a[q];
+    }
+
+    @barrier();  // nekRS builds with okl/add_barriers = false (platform.cpp)
+
+    for(int ij=0; ij<p_Nq*p_Nq; ++ij; @inner(0)){
+      if (ij < 10) {
+        dfloat r = s[ij][0];
+        for(int m=1; m<p_Nq*p_Nq; ++m) r = (ij == 9) ? fmax(r, s[ij][m]) : r + s[ij][m];
+        out[e*10 + ij] = r;
+      }
     }
   }
 }
@@ -149,13 +260,49 @@ void readCaseData() {
   platform->par->extract("casedata", "slenderness", slenderness);
   platform->par->extract("casedata", "gaussianwidth", epsilon);
   platform->par->extract("casedata", "gaussiancutoff", rcutFactor);
+  platform->par->extract("casedata", "gaussiankernel", gaussianKernel);
+  kernel2 = (gaussianKernel == "gauss2");
+  nekrsCheck(!kernel2 && gaussianKernel != "gauss", platform->comm.mpiComm(), EXIT_FAILURE,
+             "gaussianKernel = %s; use gauss or gauss2\n", gaussianKernel.c_str());
   platform->par->extract("casedata", "ramptime", T_ramp);
   platform->par->extract("casedata", "relaxcutofffrequency", f_c);
+  platform->par->extract("casedata", "relaxscheme", relaxScheme);
+  relaxCN = (relaxScheme == "cn");
+  relaxNone = (relaxScheme == "none");
+  nekrsCheck(!relaxCN && !relaxNone && relaxScheme != "euler", platform->comm.mpiComm(), EXIT_FAILURE,
+             "relaxScheme = %s; use euler, cn or none\n", relaxScheme.c_str());
   platform->par->extract("casedata", "beatfrequency", f_beat);
   platform->par->extract("casedata", "ciliumlength", L_c);
   platform->par->extract("casedata", "diagnosticinterval", diagInterval);
   platform->par->extract("casedata", "wallplanez", wallPlaneZ);
   platform->par->extract("casedata", "profilecilia", profileCilia);
+  platform->par->extract("casedata", "kinematics", kinematics);
+  platform->par->extract("casedata", "rodaxis", rodAxis);
+  platform->par->extract("casedata", "rodvelocity", rodVelocity);
+  platform->par->extract("casedata", "rodcentrez", rodCentreZ);
+  platform->par->extract("casedata", "subtractselfflow", subtractSelfFlow);
+  platform->par->extract("casedata", "dumppanelsteps", dumpPanelSteps);
+  platform->par->extract("casedata", "panellength", panelLength);
+  nekrsCheck(panelLength != "uniform" && panelLength != "arclength", platform->comm.mpiComm(), EXIT_FAILURE,
+             "panelLength = %s; use uniform or arclength\n", panelLength.c_str());
+  platform->par->extract("casedata", "couplingscheme", couplingScheme);
+  platform->par->extract("casedata", "couplingtol", couplingTol);
+  platform->par->extract("casedata", "couplingmaxiter", couplingMaxIter);
+  platform->par->extract("casedata", "couplingomega", couplingOmega);
+  platform->par->extract("casedata", "couplingreuse", couplingReuse);
+  platform->par->extract("casedata", "couplingfilter", couplingFilter);
+  platform->par->extract("casedata", "iqnverbose", iqnVerbose);
+  couplingIQN = (couplingScheme == "iqn");
+  nekrsCheck(!couplingIQN && couplingScheme != "explicit", platform->comm.mpiComm(), EXIT_FAILURE,
+             "couplingScheme = %s; use explicit or iqn\n", couplingScheme.c_str());
+  nekrsCheck(couplingIQN && (!relaxNone || subtractSelfFlow == 2), platform->comm.mpiComm(), EXIT_FAILURE,
+             "%s\n", "couplingScheme = iqn needs relaxScheme = none and subtractSelfFlow 0 or 1");
+  auto axisIndex = [](const std::string &a) { return a == "x" ? 0 : a == "y" ? 1 : a == "z" ? 2 : -1; };
+  nekrsCheck(kinematics != "fb" && kinematics != "rod", platform->comm.mpiComm(), EXIT_FAILURE,
+             "kinematics = %s; use fb or rod\n", kinematics.c_str());
+  nekrsCheck(kinematics == "rod" && (axisIndex(rodAxis) < 0 || axisIndex(rodVelocity) < 0),
+             platform->comm.mpiComm(), EXIT_FAILURE, "rodAxis = %s, rodVelocity = %s; use x, y or z\n",
+             rodAxis.c_str(), rodVelocity.c_str());
 
   // Already converted by nekRS: viscosity = -Re in the .par gives 1/Re here
   platform->options.getArgs("FLUID VISCOSITY", mu_hat);
@@ -167,6 +314,7 @@ void writeForceHistory(double time) {
   out.write(reinterpret_cast<const char*>(&time), sizeof(time));
   out.write(reinterpret_cast<const char*>(&N_part), sizeof(N_part));
   out.write(reinterpret_cast<const char*>(f_old.data()), f_old.size() * sizeof(dfloat));
+  out.write(reinterpret_cast<const char*>(fstar_old.data()), fstar_old.size() * sizeof(dfloat));
 }
 
 // After a restart, reload the relaxed forces so the relaxation transient does not restart.
@@ -183,6 +331,11 @@ void readForceHistory(double time) {
     if (n_saved == N_part && std::abs(time - t_saved) <= 2.0 * nrs->dt[0] + 1e-12) {
       in.read(reinterpret_cast<char*>(f_old.data()), f_old.size() * sizeof(dfloat));
       ok = in.good() ? 1 : 0;
+      // f* was added to the file for cn; an older file has none, so start f* from the relaxed force
+      if (ok) {
+        in.read(reinterpret_cast<char*>(fstar_old.data()), fstar_old.size() * sizeof(dfloat));
+        if (!in.good()) fstar_old = f_old;
+      }
     }
     if (ok) {
       std::cout << "cilia: restored force history from " << forceHistoryFile
@@ -195,36 +348,136 @@ void readForceHistory(double time) {
   MPI_Bcast(&ok, 1, MPI_INT, 0, platform->comm.mpiComm());
   if (ok) {
     MPI_Bcast(f_old.data(), f_old.size(), MPI_DFLOAT, 0, platform->comm.mpiComm());
+    MPI_Bcast(fstar_old.data(), fstar_old.size(), MPI_DFLOAT, 0, platform->comm.mpiComm());
   } else {
     std::fill(f_old.begin(), f_old.end(), 0.0);
+    std::fill(fstar_old.begin(), fstar_old.end(), 0.0);
   }
 }
 
-void userForcing(double time) {
-  if (N_part == 0) return;
-
-  if (restoreForceHistory) {
-    readForceHistory(time);
-    restoreForceHistory = false;
+// Gaussian-regularised Stokeslet for the blob exp(-r^2/eps^2)/(pi^1.5 eps^3): u = (a F + b (F.rhat) rhat)/mu,
+// G = erf(r/eps)/(4 pi r), B'(r) = [(r^2/2 - eps^2/4) erf(r/eps) + eps r e^{-r^2/eps^2}/(2 sqrt pi)]/(4 pi r^2),
+// a = G - B'/r, b = 3 B'/r - G (model_checks/stokeslet_closed_form.py checks it against the Fourier integral).
+// M.8 gauss2 = (1 - eps^2/4 lap) gauss: G2 = G + (eps^2/4) phi, B2' = B' - (eps^2/4) G'
+void regStokeslet(dfloat r, dfloat &a, dfloat &b) {
+  const dfloat pi = 4.0 * atan(1.0);
+  if (r < 1e-3 * epsilon) { a = (kernel2 ? 1.5 : 1.0) / (3.0 * pow(pi, 1.5) * epsilon); b = 0.0; return; }
+  const dfloat E = erf(r / epsilon), ex = exp(-r * r / (epsilon * epsilon));
+  dfloat G = E / (4.0 * pi * r);
+  dfloat Bp = ((0.5 * r * r - 0.25 * epsilon * epsilon) * E + epsilon * r * ex / (2.0 * sqrt(pi))) / (4.0 * pi * r * r);
+  if (kernel2) {
+    const dfloat Gp = (2.0 * r * ex / (sqrt(pi) * epsilon) - E) / (4.0 * pi * r * r);
+    G += 0.25 * ex / (pow(pi, 1.5) * epsilon);
+    Bp -= 0.25 * epsilon * epsilon * Gp;
   }
+  a = G - Bp / r;
+  b = 3.0 * Bp / r - G;
+}
 
+// M.6 subtractSelfFlow = 2: per cilium, solve (I - C S) f = C (V - u) with C the 3x3 RFT resistance of each panel
+// (R mu l (C_par t t + C_perp (I - t t))) and S the free-space regularised Stokeslet among the cilium's own panels
+// at the current positions; lost panels (u = -999) get f = 0
+std::vector<dfloat> implicitSelfFlowForce(const std::vector<dfloat> &x_pc, const std::vector<dfloat> &V_cilia,
+                                          const std::vector<dfloat> &tl_pc, const std::vector<dfloat> &u_pc, dfloat R) {
+  const int n = 3 * N_p;
+  std::vector<dfloat> fs(N_part * 3, 0.0), A(n * n), b(n), Cm(N_p * 9);
+  for (int k = 0; k < N_cilia; k++) {
+    std::vector<char> lost(N_p);
+    for (int i = 0; i < N_p; i++) {
+      const int idx = k * N_p + i;
+      const dfloat* t = &tl_pc[idx*4];
+      const dfloat scale = R * mu_hat * tl_pc[idx*4 + 3];
+      for (int a = 0; a < 3; a++)
+        for (int c = 0; c < 3; c++)
+          Cm[i*9 + a*3 + c] = scale * (C_perp * (a == c ? 1.0 : 0.0) + (C_par - C_perp) * t[a] * t[c]);
+      lost[i] = (u_pc[idx] == -999.0 && u_pc[idx + N_part] == -999.0 && u_pc[idx + 2 * N_part] == -999.0);
+      dfloat Vr[3];
+      for (int c = 0; c < 3; c++) Vr[c] = lost[i] ? 0.0 : V_cilia[idx*3 + c] - u_pc[idx + c * N_part];
+      for (int a = 0; a < 3; a++) {
+        b[i*3 + a] = 0.0;
+        for (int c = 0; c < 3; c++) b[i*3 + a] += Cm[i*9 + a*3 + c] * Vr[c];
+      }
+    }
+    // A = I - C S, row block i: -C_i S_ij; S_ij = (a I + b dhat dhat) / mu, d = x_i - x_j
+    for (int i = 0; i < N_p; i++) {
+      const int ii = k * N_p + i;
+      for (int j = 0; j < N_p; j++) {
+        const int jj = k * N_p + j;
+        dfloat d[3], r = 0.0;
+        for (int c = 0; c < 3; c++) { d[c] = x_pc[ii*3 + c] - x_pc[jj*3 + c]; r += d[c] * d[c]; }
+        r = sqrt(r);
+        dfloat sa, sb;
+        regStokeslet(r, sa, sb);
+        dfloat S[9];
+        for (int a = 0; a < 3; a++)
+          for (int c = 0; c < 3; c++)
+            S[a*3 + c] = (sa * (a == c ? 1.0 : 0.0) + (r > 0 ? sb * d[a] * d[c] / (r * r) : 0.0)) / mu_hat;
+        for (int a = 0; a < 3; a++)
+          for (int c = 0; c < 3; c++) {
+            dfloat cs = 0.0;
+            for (int m = 0; m < 3; m++) cs += Cm[i*9 + a*3 + m] * S[m*3 + c];
+            A[(i*3 + a) * n + j*3 + c] = (lost[i] ? 0.0 : -cs) + (i == j && a == c ? 1.0 : 0.0);
+          }
+      }
+    }
+    // Gaussian elimination with partial pivoting
+    for (int col = 0; col < n; col++) {
+      int piv = col;
+      for (int r = col + 1; r < n; r++) if (std::abs(A[r*n + col]) > std::abs(A[piv*n + col])) piv = r;
+      if (piv != col) { for (int c = 0; c < n; c++) std::swap(A[col*n + c], A[piv*n + c]); std::swap(b[col], b[piv]); }
+      for (int r = col + 1; r < n; r++) {
+        const dfloat m = A[r*n + col] / A[col*n + col];
+        if (m == 0.0) continue;
+        for (int c = col; c < n; c++) A[r*n + c] -= m * A[col*n + c];
+        b[r] -= m * b[col];
+      }
+    }
+    for (int r = n - 1; r >= 0; r--) {
+      dfloat v = b[r];
+      for (int c = r + 1; c < n; c++) v -= A[r*n + c] * b[c];
+      b[r] = v / A[r*n + r];
+    }
+    for (int m = 0; m < n; m++) fs[k * N_p * 3 + m] = b[m];
+  }
+  return fs;
+}
+
+// Panel positions x_pc and prescribed velocities V_cilia at this time (Fulford-Blake beat or the M.3 rod),
+// the unit tangent and length per panel tl_pc (tx, ty, tz, l; M.5 panelLength),
+// and px, py, pz: the positions wrapped into the periodic box for the point search
+void panelKinematics(double time, std::vector<dfloat> &x_pc, std::vector<dfloat> &V_cilia, std::vector<dfloat> &tl_pc,
+                     std::vector<dfloat> &px, std::vector<dfloat> &py, std::vector<dfloat> &pz) {
   const dfloat pi = 4.0 * atan(1.0);
   const dfloat omega = 2.0 * pi * f_beat;
 
-  ptic("udfSource::kinematics");
-  // Panel positions x_pc and prescribed velocities V_cilia (Fulford-Blake beat)
-  std::vector<dfloat> px(N_part, 0.0), py(N_part, 0.0), pz(N_part, 0.0);
-  std::vector<dfloat> x_pc(N_part * 3, 0.0);
-  std::vector<dfloat> V_cilia(N_part * 3, 0.0);
+  px.assign(N_part, 0.0); py.assign(N_part, 0.0); pz.assign(N_part, 0.0);
+  x_pc.assign(N_part * 3, 0.0);
+  V_cilia.assign(N_part * 3, 0.0);
+  tl_pc.assign(N_part * 4, 0.0);
+  const bool arclength = (panelLength == "arclength");
 
   int n = 0;
   for(int k=0; k<N_cilia; k++) {
     for(int i=0; i<N_p; i++) {
       dfloat s = (dfloat)(i + 0.5) / (dfloat)N_p;
 
+      if (kinematics == "rod") {
+        const dfloat c[3] = {xc[k], yc[k], rodCentreZ};
+        for (int d = 0; d < 3; d++) {
+          x_pc[n*3 + d] = c[d] + (rodAxis[0] - 'x' == d ? (s - 0.5) * L_c : 0.0);
+          V_cilia[n*3 + d] = (rodVelocity[0] - 'x' == d) ? 1.0 : 0.0;
+          tl_pc[n*4 + d] = (rodAxis[0] - 'x' == d) ? 1.0 : 0.0;
+        }
+        tl_pc[n*4 + 3] = l_panel;
+        px[n] = x_pc[n*3 + 0]; py[n] = x_pc[n*3 + 1]; pz[n] = x_pc[n*3 + 2];
+        n++;
+        continue;
+      }
+
       dfloat xi1 = 0.5 * coeff(A1, 1, s);
       dfloat xi2 = 0.5 * coeff(A2, 1, s);
       dfloat dxi1 = 0.0, dxi2 = 0.0;
+      dfloat sxi1 = 0.5 * dcoeff(A1, 1, s), sxi2 = 0.5 * dcoeff(A2, 1, s);   // d/ds
 
       for(int j=1; j<=N_o; j++){
         dfloat wt = j * omega * time;
@@ -233,6 +486,9 @@ void userForcing(double time) {
 
         xi2 += coeff(A2, j+1, s)*cos(wt) + coeff(B2, j, s)*sin(wt);
         dxi2 -= (j*omega)*coeff(A2, j+1, s)*sin(wt) - (j*omega)*coeff(B2, j, s)*cos(wt);
+
+        sxi1 += dcoeff(A1, j+1, s)*cos(wt) + dcoeff(B1, j, s)*sin(wt);
+        sxi2 += dcoeff(A2, j+1, s)*cos(wt) + dcoeff(B2, j, s)*sin(wt);
       }
 
       // Scale by cilium length, rotate the beat plane by beta about z
@@ -248,8 +504,30 @@ void userForcing(double time) {
       V_cilia[n*3 + 1] = L_c * dxi1 * sin(beta_c[k]);
       V_cilia[n*3 + 2] = L_c * dxi2;
 
+      if (arclength) {
+        const dfloat sn = sqrt(sxi1 * sxi1 + sxi2 * sxi2);
+        tl_pc[n*4 + 0] = sxi1 * cos(beta_c[k]) / sn;
+        tl_pc[n*4 + 1] = sxi1 * sin(beta_c[k]) / sn;
+        tl_pc[n*4 + 2] = sxi2 / sn;
+        tl_pc[n*4 + 3] = L_c * sn / N_p;
+      }
+
       n++;
     }
+  }
+
+  // uniform: tangent by centred differences inside, one-sided at the ends; l = L_c/N_p
+  if (!arclength && kinematics != "rod") {
+    for (int k = 0; k < N_cilia; k++)
+      for (int i = 0; i < N_p; i++) {
+        const int idx = k * N_p + i;
+        const int idxm = (i == 0) ? idx : idx - 1, idxp = (i == N_p - 1) ? idx : idx + 1;
+        dfloat t[3], tn = 0.0;
+        for (int c = 0; c < 3; c++) { t[c] = x_pc[idxp*3 + c] - x_pc[idxm*3 + c]; tn += t[c] * t[c]; }
+        tn = sqrt(tn);
+        for (int c = 0; c < 3; c++) tl_pc[idx*4 + c] = tn > 1.0e-14 ? t[c] / tn : 0.0;
+        tl_pc[idx*4 + 3] = l_panel;
+      }
   }
 
   // Wrap into the periodic box so panels that leave through a side are found on the other side
@@ -258,8 +536,9 @@ void userForcing(double time) {
     px[m] -= Lx * std::floor((px[m] - xmin) / Lx);
     py[m] -= Ly * std::floor((py[m] - ymin) / Ly);
   }
-  ptoc("udfSource::kinematics");
+}
 
+void locatePanels(const std::vector<dfloat> &px, const std::vector<dfloat> &py, const std::vector<dfloat> &pz) {
   ptic("udfSource::copyPoints");
   o_px.copyFrom(px.data());
   o_py.copyFrom(py.data());
@@ -270,39 +549,61 @@ void userForcing(double time) {
   interp->setPoints(o_px, o_py, o_pz);
   interp->find();
   ptoc("udfSource::find");
+}
 
-  // Fluid velocity at panel centres; -999.0 marks points that could not be located
+// Fluid velocity at the located panel centres, component-major (u_pc[m + c N_part]); -999.0 marks lost points
+std::vector<dfloat> samplePanelVelocity() {
   ptic("udfSource::eval");
   std::vector<dfloat> u_pc(N_part * 3, -999.0);
   o_upc.copyFrom(u_pc.data());
   interp->eval(nrs->meshV->dim, nrs->fluid->fieldOffset, nrs->fluid->o_U, N_part, o_upc, N_part);
   o_upc.copyTo(u_pc.data());
   ptoc("udfSource::eval");
+  return u_pc;
+}
 
-  ptic("udfSource::panelForce");
+// M.3: u_bg = u - (each cilium's own free-space flow from the force that produced u: sum_h c_h f_h spread at x_h)
+void subtractOwnFlow(std::vector<dfloat> &u_pc, const std::vector<dfloat> &x_pc,
+                     const std::vector<std::vector<dfloat>> &f_h, const std::vector<std::vector<dfloat>> &x_h,
+                     const std::vector<dfloat> &c_h) {
+  for (int k = 0; k < N_cilia; k++) {
+    for (int i = 0; i < N_p; i++) {
+      const int ii = k * N_p + i;
+      if (u_pc[ii] == -999.0 && u_pc[ii + N_part] == -999.0 && u_pc[ii + 2 * N_part] == -999.0) continue;
+      dfloat us[3] = {0.0, 0.0, 0.0};
+      for (int h = 0; h < (int)c_h.size(); h++) {
+        if (c_h[h] == 0.0) continue;
+        const std::vector<dfloat> &fh = f_h[h], &xh = x_h[h];
+        for (int j = 0; j < N_p; j++) {
+          const int jj = k * N_p + j;
+          dfloat d[3], r = 0.0;
+          for (int c = 0; c < 3; c++) { d[c] = x_pc[ii*3 + c] - xh[jj*3 + c]; r += d[c] * d[c]; }
+          r = sqrt(r);
+          dfloat a, b;
+          regStokeslet(r, a, b);
+          a *= c_h[h]; b *= c_h[h];
+          dfloat Fdotd = 0.0;
+          for (int c = 0; c < 3; c++) Fdotd += fh[jj*3 + c] * d[c];
+          for (int c = 0; c < 3; c++) us[c] += a * fh[jj*3 + c] + (r > 0 ? b * Fdotd * d[c] / (r * r) : 0.0);
+        }
+      }
+      for (int c = 0; c < 3; c++) u_pc[ii + c * N_part] -= us[c] / mu_hat;
+    }
+  }
+}
 
-  // Ramp R(t) and relaxation gamma = 2 pi f_c dt (dt-independent filter)
-  const dfloat R = std::min((dfloat)1.0, (dfloat)(time / T_ramp));
-  const dfloat gamma_relax = std::min((dfloat)1.0, (dfloat)(2.0 * pi * f_c * nrs->dt[0]));
-
-  std::vector<dfloat> f(N_part * 3, 0.0);
-
+// f* = R(t) mu l (C_par V_par + C_perp V_perp) per panel, V = V_cilia - u (0 for lost panels): the force the panel
+// exerts on the fluid
+std::vector<dfloat> rftForce(const std::vector<dfloat> &tl_pc, const std::vector<dfloat> &V_cilia,
+                             const std::vector<dfloat> &u_pc, dfloat R) {
+  std::vector<dfloat> fstar(N_part * 3, 0.0);
   for(int k=0; k<N_cilia; k++) {
     for(int i=0; i<N_p; i++) {
       int idx = k * N_p + i;
-      int idxm = (i == 0) ? idx : idx - 1;
-      int idxp = (i == N_p - 1) ? idx : idx + 1;
 
-      // Unit tangent t: centred differences inside, one-sided at the ends
-      dfloat tx = x_pc[idxp*3 + 0] - x_pc[idxm*3 + 0];
-      dfloat ty = x_pc[idxp*3 + 1] - x_pc[idxm*3 + 1];
-      dfloat tz = x_pc[idxp*3 + 2] - x_pc[idxm*3 + 2];
-      dfloat tnorm = sqrt(tx*tx + ty*ty + tz*tz);
+      // Unit tangent t and panel length l from panelKinematics (M.5 panelLength)
+      const dfloat tx = tl_pc[idx*4 + 0], ty = tl_pc[idx*4 + 1], tz = tl_pc[idx*4 + 2];
 
-      if(tnorm > 1.0e-14) { tx /= tnorm; ty /= tnorm; tz /= tnorm; }
-      else { tx = 0.0; ty = 0.0; tz = 0.0; }
-
-      // V_rel = V_cilia - u(x_pc); zero for lost points
       dfloat Vx = 0.0, Vy = 0.0, Vz = 0.0;
       dfloat ux = u_pc[idx + 0 * N_part];
       dfloat uy = u_pc[idx + 1 * N_part];
@@ -318,35 +619,277 @@ void userForcing(double time) {
       dfloat Vparx = V_dot_t * tx, Vpary = V_dot_t * ty, Vparz = V_dot_t * tz;
       dfloat Vperpx = Vx - Vparx,  Vperpy = Vy - Vpary,  Vperpz = Vz - Vparz;
 
-      // f* = R(t) mu l (C_par V_par + C_perp V_perp), the force the panel exerts on the fluid
-      dfloat scale = R * mu_hat * l_panel;
-      dfloat fstar_x = scale * (C_par*Vparx + C_perp*Vperpx);
-      dfloat fstar_y = scale * (C_par*Vpary + C_perp*Vperpy);
-      dfloat fstar_z = scale * (C_par*Vparz + C_perp*Vperpz);
-
-      f[idx*3 + 0] = (1.0 - gamma_relax) * f_old[idx*3 + 0] + gamma_relax * fstar_x;
-      f[idx*3 + 1] = (1.0 - gamma_relax) * f_old[idx*3 + 1] + gamma_relax * fstar_y;
-      f[idx*3 + 2] = (1.0 - gamma_relax) * f_old[idx*3 + 2] + gamma_relax * fstar_z;
-
-      f_old[idx*3 + 0] = f[idx*3 + 0];
-      f_old[idx*3 + 1] = f[idx*3 + 1];
-      f_old[idx*3 + 2] = f[idx*3 + 2];
+      dfloat scale = R * mu_hat * tl_pc[idx*4 + 3];
+      fstar[idx*3 + 0] = scale * (C_par*Vparx + C_perp*Vperpx);
+      fstar[idx*3 + 1] = scale * (C_par*Vpary + C_perp*Vperpy);
+      fstar[idx*3 + 2] = scale * (C_par*Vparz + C_perp*Vperpz);
     }
+  }
+  return fstar;
+}
+
+// Explicit coupling (couplingScheme = explicit): the force from u^n, relaxed, enters the next solve through o_EXT
+void userForcing(double time) {
+  if (N_part == 0 || couplingIQN) return;
+
+  if (restoreForceHistory) {
+    readForceHistory(time);
+    restoreForceHistory = false;
+  }
+
+  const dfloat pi = 4.0 * atan(1.0);
+
+  ptic("udfSource::kinematics");
+  std::vector<dfloat> px, py, pz, x_pc, V_cilia, tl_pc;
+  panelKinematics(time, x_pc, V_cilia, tl_pc, px, py, pz);
+  ptoc("udfSource::kinematics");
+
+  locatePanels(px, py, pz);
+  std::vector<dfloat> u_pc = samplePanelVelocity();
+
+  // M.3: the subtracted force is the one that produced u, sum_i c_i f_i spread at x_i
+  // (f_old at the current positions alone gives an O(dt) error)
+  std::vector<dfloat> c_ext(nrs->o_coeffEXT.size());
+  nrs->o_coeffEXT.copyTo(c_ext.data());
+  const bool dumpPanels = forcingCalls++ < dumpPanelSteps;
+  const bool keepHist = subtractSelfFlow == 1 || dumpPanels;
+  if (keepHist && f_hist.empty()) {   // first step (or restart): f_old is zero or nearly in place
+    f_hist.assign(c_ext.size(), f_old);
+    x_hist.assign(c_ext.size(), x_pc);
+    c_hist.assign(c_ext.size(), 0.0);
+    c_hist[0] = 1.0;
+  }
+  const std::vector<dfloat> u_raw = dumpPanels ? u_pc : std::vector<dfloat>();
+  if (subtractSelfFlow == 1) subtractOwnFlow(u_pc, x_pc, f_hist, x_hist, c_hist);
+
+  ptic("udfSource::panelForce");
+
+  // Ramp R(t) and relaxation gamma = 2 pi f_c dt (dt-independent filter)
+  const dfloat R = std::min((dfloat)1.0, (dfloat)(time / T_ramp));
+  const dfloat gamma_relax = relaxNone ? (dfloat)1.0 : std::min((dfloat)1.0, (dfloat)(2.0 * pi * f_c * nrs->dt[0]));
+  // cn: trapezoidal rule for df/dt = 2 pi f_c (f* - f), f_n = [(1 - g/2) f_old + (g/2)(f* + f*_old)] / (1 + g/2)
+  const dfloat cn_a = (1.0 - 0.5 * gamma_relax) / (1.0 + 0.5 * gamma_relax);
+  const dfloat cn_b = 0.5 * gamma_relax / (1.0 + 0.5 * gamma_relax);
+
+  std::vector<dfloat> f(N_part * 3, 0.0);
+  const std::vector<dfloat> fstar = (subtractSelfFlow == 2) ? implicitSelfFlowForce(x_pc, V_cilia, tl_pc, u_pc, R)
+                                                            : rftForce(tl_pc, V_cilia, u_pc, R);
+
+  for (int m = 0; m < N_part * 3; m++) {
+    if (relaxCN) {
+      f[m] = cn_a * f_old[m] + cn_b * (fstar[m] + fstar_old[m]);
+    } else {  // euler; none has gamma = 1, so f = f*
+      f[m] = (1.0 - gamma_relax) * f_old[m] + gamma_relax * fstar[m];
+    }
+    fstar_old[m] = fstar[m];
+    f_old[m] = f[m];
+  }
+
+  // M.3: drag delivered vs RFT, sum over panels of f.V / (R mu C L_c), C for the rod's V direction
+  if (kinematics == "rod" && platform->comm.mpiRank() == 0) {
+    const int dv = rodVelocity[0] - 'x';
+    const dfloat C = (rodAxis == rodVelocity) ? C_par : C_perp;
+    const dfloat norm = std::max(R, (dfloat)1e-30) * mu_hat * C * L_c * N_cilia;
+    dfloat Ff = 0, Fs = 0, ubar = 0;
+    for (int m = 0; m < N_part; m++) {
+      Ff += f[m*3 + dv];
+      Fs += fstar_old[m*3 + dv];
+      ubar += u_pc[m + dv * N_part] / N_part;
+    }
+    const int mid = N_p / 2;
+    printf("%.10e %.10e %.10e %.10e %.10e  rod\n", time, Ff / norm, Fs / norm, ubar, u_pc[mid + dv * N_part]);
   }
 
   ptoc("udfSource::panelForce");
 
   ptic("udfSource::copyForces");
   o_xpc.copyFrom(x_pc.data());
+  if (keepHist) {   // shift the history: this call's f, x enter o_EXT slot 0 with weight c_ext[0] next solve
+    for (int h = (int)f_hist.size() - 1; h > 0; h--) { f_hist[h].swap(f_hist[h - 1]); x_hist[h].swap(x_hist[h - 1]); }
+    f_hist[0] = f;
+    x_hist[0] = x_pc;
+    c_hist = c_ext;
+  }
   o_f.copyFrom(f.data());
   ptoc("udfSource::copyForces");
 
+  if (dumpPanels && platform->comm.mpiRank() == 0) {
+    for (int m = 0; m < N_part; m++) {
+      dfloat fa[3] = {0.0, 0.0, 0.0};
+      for (int h = 0; h < (int)c_hist.size(); h++)
+        for (int c = 0; c < 3; c++) fa[c] += c_hist[h] * f_hist[h][m*3 + c];
+      printf("panel %d %.6e %d %d", forcingCalls, time, m / N_p, m % N_p);
+      for (int c = 0; c < 3; c++) printf(" %.6e", fstar_old[m*3 + c]);
+      for (int c = 0; c < 3; c++) printf(" %.6e", fa[c]);
+      for (int c = 0; c < 3; c++) printf(" %.6e", u_raw[m + c * N_part]);
+      for (int c = 0; c < 3; c++) printf(" %.6e", u_raw[m + c * N_part] - u_pc[m + c * N_part]);
+      for (int c = 0; c < 3; c++) printf(" %.6e", V_cilia[m*3 + c]);
+      printf("\n");
+    }
+    printf("panel_cext %d", forcingCalls);
+    for (dfloat c : c_ext) printf(" %g", c);
+    printf("\n");
+  }
+
   ptic("udfSource::addCiliaForce");
   addCiliaForce(nrs->meshV->Nelements, nrs->fluid->fieldOffset, N_part,
-                   o_xpc, o_f, epsinv2, rcut2, invnorm, Lx, Ly,
+                   o_xpc, o_f, epsinv2, rcut2, invnorm, kernel2, Lx, Ly,
                    nrs->meshV->o_x, nrs->meshV->o_y, nrs->meshV->o_z,
-                   nrs->fluid->o_explicitTerms());
+                   0, nrs->meshV->o_Jw, nrs->fluid->o_explicitTerms());
   ptoc("udfSource::addCiliaForce");
+}
+
+// ---------------------------------------------------------------------------
+// M.6 implicit coupling (couplingScheme = iqn). Per step, the unknown is F, the panel forces applied at x(t_{n+1});
+// H(F) = C (V - u(F) + S F) is f* from the u that F produced (Stokes: H is affine in F within a step).
+// IQN-ILS solves H(F) = F with secant pairs dR = r^{k+1} - r^k, dX = H^{k+1} - H^k (r = H(F) - F):
+// c = argmin |dR c + r|, F^{k+1} = H(F^k) + dX c; pairs from the last couplingReuse steps are kept.
+// The force is added straight into o_JwF (built once per step by makeForcing, read by the pressure and velocity
+// solves), so o_EXT holds no cilia force and nothing is extrapolated.
+// ---------------------------------------------------------------------------
+occa::memory o_JwF0;                                  // o_JwF without the cilia force, saved at corrector 1
+std::vector<dfloat> iqnX, iqnV, iqnTL;                // panel positions, velocities, tangents and lengths at t_{n+1}
+std::vector<dfloat> iqnF, iqnHprev, iqnRprev;         // applied F^k; H, r of the previous corrector
+std::vector<std::vector<dfloat>> iqnDR, iqnDX;        // this step's secant pairs, oldest first
+std::vector<std::vector<std::vector<dfloat>>> iqnOldDR, iqnOldDX;   // earlier steps' pairs, newest step first
+std::vector<std::vector<dfloat>> iqnFconv;            // converged F of the last steps, newest first (predictor)
+double iqnTime = 0;
+dfloat iqnR = 0;
+long iqnItersSum = 0, iqnSteps = 0, iqnMaxed = 0;
+
+dfloat vdot(const std::vector<dfloat> &a, const std::vector<dfloat> &b) {
+  dfloat s = 0.0;
+  for (size_t m = 0; m < a.size(); m++) s += a[m] * b[m];
+  return s;
+}
+
+// nrs->preFluid: before each corrector's fluid solve
+void ciliaPreFluid(double time, int tstep) {
+  if (N_part == 0 || !couplingIQN) return;
+  const int iter = nrs->outerCorrector;
+
+  if (iter == 1) {
+    if (restoreForceHistory) {
+      readForceHistory(time);
+      restoreForceHistory = false;
+    }
+    iqnTime = time;
+    iqnR = std::min((dfloat)1.0, (dfloat)(time / T_ramp));
+    std::vector<dfloat> px, py, pz;
+    panelKinematics(time, iqnX, iqnV, iqnTL, px, py, pz);
+    locatePanels(px, py, pz);
+    o_xpc.copyFrom(iqnX.data());
+
+    // Predictor: extrapolate the converged forces with nekRS's EXT coefficients for this step
+    std::vector<dfloat> c_ext(nrs->o_coeffEXT.size());
+    nrs->o_coeffEXT.copyTo(c_ext.data());
+    if (iqnFconv.empty()) iqnFconv.assign(c_ext.size(), f_old);
+    iqnF.assign(N_part * 3, 0.0);
+    for (size_t h = 0; h < c_ext.size(); h++)
+      for (int m = 0; m < N_part * 3; m++) iqnF[m] += c_ext[h] * iqnFconv[h][m];
+
+    iqnDR.clear();
+    iqnDX.clear();
+    if (!o_JwF0.isInitialized()) o_JwF0 = platform->device.malloc<dfloat>(nrs->fluid->o_JwF.size());   // typed: size() counts dfloats
+    o_JwF0.copyFrom(nrs->fluid->o_JwF);
+  }
+
+  nrs->fluid->o_JwF.copyFrom(o_JwF0);
+  o_f.copyFrom(iqnF.data());
+  addCiliaForce(nrs->meshV->Nelements, nrs->fluid->fieldOffset, N_part,
+                o_xpc, o_f, epsinv2, rcut2, invnorm, kernel2, Lx, Ly,
+                nrs->meshV->o_x, nrs->meshV->o_y, nrs->meshV->o_z,
+                1, nrs->meshV->o_Jw, nrs->fluid->o_JwF);
+}
+
+// nrs->userConvergenceCheck: after each corrector's fluid solve; true ends the step
+bool ciliaConverged(int iter) {
+  if (N_part == 0 || !couplingIQN) return true;
+
+  std::vector<dfloat> u_pc = samplePanelVelocity();
+  if (subtractSelfFlow == 1) subtractOwnFlow(u_pc, iqnX, {iqnF}, {iqnX}, {1.0});
+  const std::vector<dfloat> H = rftForce(iqnTL, iqnV, u_pc, iqnR);
+  const int n = N_part * 3;
+  std::vector<dfloat> r(n);
+  for (int m = 0; m < n; m++) r[m] = H[m] - iqnF[m];
+  const dfloat rn = sqrt(vdot(r, r)), Hn = sqrt(vdot(H, H));
+
+  if (iter > 1) {
+    std::vector<dfloat> dr(n), dx(n);
+    for (int m = 0; m < n; m++) { dr[m] = r[m] - iqnRprev[m]; dx[m] = H[m] - iqnHprev[m]; }
+    iqnDR.push_back(dr);
+    iqnDX.push_back(dx);
+  }
+
+  const bool converged = rn <= couplingTol * Hn;
+  if (iqnVerbose && platform->comm.mpiRank() == 0)
+    printf("%.10e %d %.3e  iqnres\n", iqnTime, iter, Hn > 0 ? rn / Hn : 0.0);
+  if (converged || iter >= couplingMaxIter) {
+    for (int h = (int)iqnFconv.size() - 1; h > 0; h--) iqnFconv[h].swap(iqnFconv[h - 1]);
+    iqnFconv[0] = iqnF;
+    f_old = iqnF;      // the force the converged u came from (restart file)
+    fstar_old = H;
+    if (couplingReuse > 0) {
+      iqnOldDR.insert(iqnOldDR.begin(), iqnDR);
+      iqnOldDX.insert(iqnOldDX.begin(), iqnDX);
+      if ((int)iqnOldDR.size() > couplingReuse) { iqnOldDR.pop_back(); iqnOldDX.pop_back(); }
+    }
+    iqnItersSum += iter;
+    iqnSteps++;
+    if (!converged) iqnMaxed++;
+    if (platform->comm.mpiRank() == 0)
+      printf("%.10e %d %.3e %ld  iqn\n", iqnTime, iter, Hn > 0 ? rn / Hn : 0.0, iqnMaxed);
+    return true;
+  }
+  iqnRprev = r;
+  iqnHprev = H;
+
+  // Secant columns, newest first: this step's, then the earlier steps'. QR by modified Gram-Schmidt (twice),
+  // dropping columns that are nearly dependent on the newer ones
+  std::vector<const std::vector<dfloat>*> candR, candX;
+  for (int j = (int)iqnDR.size() - 1; j >= 0; j--) { candR.push_back(&iqnDR[j]); candX.push_back(&iqnDX[j]); }
+  for (size_t s = 0; s < iqnOldDR.size(); s++)
+    for (int j = (int)iqnOldDR[s].size() - 1; j >= 0; j--) { candR.push_back(&iqnOldDR[s][j]); candX.push_back(&iqnOldDX[s][j]); }
+
+  std::vector<std::vector<dfloat>> Q;
+  std::vector<std::vector<dfloat>> Rm;   // Rm[j] = column j of R (length j + 1)
+  std::vector<const std::vector<dfloat>*> W;
+  for (size_t j = 0; j < candR.size() && (int)Q.size() < n; j++) {
+    std::vector<dfloat> w = *candR[j];
+    const dfloat vn = sqrt(vdot(w, w));
+    if (vn == 0.0) continue;
+    std::vector<dfloat> rc(Q.size() + 1, 0.0);
+    for (int pass = 0; pass < 2; pass++)
+      for (size_t i = 0; i < Q.size(); i++) {
+        const dfloat p = vdot(Q[i], w);
+        rc[i] += p;
+        for (int m = 0; m < n; m++) w[m] -= p * Q[i][m];
+      }
+    const dfloat wn = sqrt(vdot(w, w));
+    if (wn < couplingFilter * vn) continue;
+    for (int m = 0; m < n; m++) w[m] /= wn;
+    rc[Q.size()] = wn;
+    Q.push_back(w);
+    Rm.push_back(rc);
+    W.push_back(candX[j]);
+  }
+
+  if (Q.empty()) {
+    for (int m = 0; m < n; m++) iqnF[m] += couplingOmega * r[m];
+  } else {
+    // c = -R^{-1} Q^T r, F = H + W c
+    const int q = Q.size();
+    std::vector<dfloat> c(q);
+    for (int i = 0; i < q; i++) c[i] = -vdot(Q[i], r);
+    for (int i = q - 1; i >= 0; i--) {
+      for (int j = i + 1; j < q; j++) c[i] -= Rm[j][i] * c[j];
+      c[i] /= Rm[i][i];
+    }
+    iqnF = H;
+    for (int j = 0; j < q; j++)
+      for (int m = 0; m < n; m++) iqnF[m] += c[j] * (*W[j])[m];
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -409,28 +952,36 @@ void setupPlaneWeights(dfloat z0, occa::memory &o_W, occa::memory &o_WDz, dfloat
   o_WDz.copyFrom(WDz.data(), mesh->Nlocal * sizeof(dfloat));
 }
 
-// One 'vals' and one 'wall' line per call, on rank 0 (gate.py reads both)
+// One 'vals' and one 'wall' line per call, on rank 0 (gate.py reads both).
+// P1.4: one diagReduce kernel and one copy instead of 10 separate device reductions.
+occa::memory o_diag;
+std::vector<dfloat> diagPartial;
+
 void printDiagnostics(double time) {
   auto mesh = nrs->meshV;
   auto comm = platform->comm.mpiComm();
+  const int nq = 10;
 
-  const dfloat ubar = platform->linAlg->innerProd(mesh->Nlocal, nrs->fluid->o_U, mesh->o_Jw, comm) / mesh->volume;
+  if (!o_diag.isInitialized()) {
+    diagPartial.resize(mesh->Nelements * nq);
+    o_diag = platform->device.malloc(diagPartial.size() * sizeof(dfloat));
+  }
+  diagReduce(mesh->Nelements, nrs->fluid->fieldOffset, mesh->o_Jw, nrs->fluid->o_U, nrs->fluid->o_P,
+             o_Wplane, o_WplaneDz, o_Wwall, o_WwallDz, o_diag);
+  o_diag.copyTo(diagPartial.data(), diagPartial.size() * sizeof(dfloat));
 
-  poolDeviceMemory<dfloat> o_magV(mesh->Nlocal);
-  platform->linAlg->magVector(mesh->Nlocal, nrs->fluid->fieldOffset, nrs->fluid->o_U, o_magV);
-  const dfloat Vmax = platform->linAlg->max(mesh->Nlocal, o_magV, comm);
+  double sum[nq - 1] = {0}, vmax = 0;
+  for (dlong e = 0; e < mesh->Nelements; ++e) {
+    for (int q = 0; q < nq - 1; ++q) sum[q] += diagPartial[e * nq + q];
+    vmax = std::max(vmax, (double)diagPartial[e * nq + nq - 1]);
+  }
+  MPI_Allreduce(MPI_IN_PLACE, sum, nq - 1, MPI_DOUBLE, MPI_SUM, comm);
+  MPI_Allreduce(MPI_IN_PLACE, &vmax, 1, MPI_DOUBLE, MPI_MAX, comm);
 
+  const dfloat ubar = sum[0] / mesh->volume, Vmax = vmax;
   // Plane integrals in code units (tau = du/dz, no mu)
-  const auto off = nrs->fluid->fieldOffset;
-  const auto &o_U = nrs->fluid->o_U, &o_P = nrs->fluid->o_P;
-  const dfloat Iu    = platform->linAlg->innerProd(mesh->Nlocal, o_U, o_Wplane, comm, 0);
-  const dfloat Iv    = platform->linAlg->innerProd(mesh->Nlocal, o_U, o_Wplane, comm, off);
-  const dfloat Ip    = platform->linAlg->innerProd(mesh->Nlocal, o_P, o_Wplane, comm);
-  const dfloat Iudz  = platform->linAlg->innerProd(mesh->Nlocal, o_U, o_WplaneDz, comm, 0);
-  const dfloat Ivdz  = platform->linAlg->innerProd(mesh->Nlocal, o_U, o_WplaneDz, comm, off);
-  const dfloat Ipw   = platform->linAlg->innerProd(mesh->Nlocal, o_P, o_Wwall, comm);
-  const dfloat Iudzw = platform->linAlg->innerProd(mesh->Nlocal, o_U, o_WwallDz, comm, 0);
-  const dfloat Ivdzw = platform->linAlg->innerProd(mesh->Nlocal, o_U, o_WwallDz, comm, off);
+  const dfloat Iu = sum[1], Iv = sum[2], Ip = sum[3], Iudz = sum[4], Ivdz = sum[5];
+  const dfloat Ipw = sum[6], Iudzw = sum[7], Ivdzw = sum[8];
 
   if (platform->comm.mpiRank() == 0) {
     printf("%.10e %.10e %.10e  vals\n", time, ubar, Vmax);
@@ -438,6 +989,47 @@ void printDiagnostics(double time) {
     printf("%.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e  wall\n",
            time, Iu, Iv, Ip, Iudz, Ivdz, Ipw, Iudzw, Ivdzw);
   }
+}
+
+// P1.9 workaround for a nekRS v26 bug: divergenceSurfaceHex3D (pressure rhs) reads the averaged normal
+// (sgeo slots NXAVGID..NZAVGID = 15..17, mesh3D.h) on zeroDirichletX/Y/Z faces too, but only setAvgNormal
+// writes those slots, and it runs only for unaligned (zeroDirichletN) faces. On aligned faces they hold
+// uninitialized device memory, so copy the face normal (slots NXID..NZID = 0..2) there. Static mesh only.
+void fixAlignedAvgNormals() {
+  auto mesh = nrs->meshV;
+  const auto &field = nrs->fluid->velocityName;
+  const int nxid = 0, nxavgid = 15;
+  const dlong Nface = mesh->Nfp * mesh->Nsgeo;
+  std::vector<dfloat> sgeo(mesh->Nelements * mesh->Nfaces * Nface);
+  mesh->o_sgeo.copyTo(sgeo.data(), sgeo.size());
+
+  int nfix = 0;
+  dfloat maxDiff = 0;
+  for (dlong e = 0; e < mesh->Nelements; e++) {
+    for (int f = 0; f < mesh->Nfaces; f++) {
+      const int bid = mesh->EToB[e * mesh->Nfaces + f];
+      if (bid < 1) continue;
+      const int t = platform->app->bc->typeId(bid, field);
+      if (!(t == bdryBase::bcType_zeroDirichletX_zeroNeumann || t == bdryBase::bcType_zeroDirichletX_udfNeumann ||
+            t == bdryBase::bcType_zeroDirichletY_zeroNeumann || t == bdryBase::bcType_zeroDirichletY_udfNeumann ||
+            t == bdryBase::bcType_zeroDirichletZ_zeroNeumann || t == bdryBase::bcType_zeroDirichletZ_udfNeumann))
+        continue;
+      for (int m = 0; m < mesh->Nfp; m++) {
+        dfloat *s = &sgeo[(e * mesh->Nfaces + f) * Nface + m * mesh->Nsgeo];
+        for (int d = 0; d < 3; d++) {
+          maxDiff = std::max(maxDiff, (dfloat)std::abs(s[nxavgid + d] - s[nxid + d]));
+          s[nxavgid + d] = s[nxid + d];
+        }
+      }
+      nfix++;
+    }
+  }
+  mesh->o_sgeo.copyFrom(sgeo.data(), sgeo.size());
+
+  MPI_Allreduce(MPI_IN_PLACE, &nfix, 1, MPI_INT, MPI_SUM, platform->comm.mpiComm());
+  MPI_Allreduce(MPI_IN_PLACE, &maxDiff, 1, MPI_DFLOAT, MPI_MAX, platform->comm.mpiComm());
+  if (platform->comm.mpiRank() == 0 && nfix > 0)
+    printf("cilia: fixAlignedAvgNormals: %d aligned faces, max |n_avg - n| before = %g\n", nfix, maxDiff);
 }
 
 void UDF_Setup() {
@@ -498,11 +1090,21 @@ void UDF_Setup() {
     printf("cilia: N_p = %d  l = %g  L/r = %g  C_par = %g  C_perp = %g  mu = %g\n",
            N_p, l_panel, slenderness, C_par, C_perp, mu_hat);
     printf("cilia: periodic box x = [%g, %g], y = [%g, %g]\n", xmin, xmin + Lx, ymin, ymin + Ly);
-    printf("cilia: epsilon = %g  r_cut = %g epsilon  T_ramp = %g  f_c = %g  f_beat = %g  L_c = %g\n",
-           epsilon, rcutFactor, T_ramp, f_c, f_beat, L_c);
+    if (kinematics == "rod")
+      printf("cilia: M.3 rod test: axis %s, velocity 1 along %s, centre z = %g; 'rod' lines: time, sum f.V/(mu C L), same for f*, mean u.V, mid-panel u.V\n",
+             rodAxis.c_str(), rodVelocity.c_str(), rodCentreZ);
+    printf("cilia: subtractSelfFlow = %d  dumpPanelSteps = %d  panelLength = %s\n", subtractSelfFlow, dumpPanelSteps,
+           panelLength.c_str());
+    printf("cilia: couplingScheme = %s  tol = %g  maxIter = %d  omega = %g  reuse = %d  filter = %g%s\n",
+           couplingScheme.c_str(), couplingTol, couplingMaxIter, couplingOmega, couplingReuse, couplingFilter,
+           couplingIQN ? "; 'iqn' lines: time, correctors, |f* - F|/|f*|, steps at maxIter so far" : "");
+    printf("cilia: gaussianKernel = %s\n", gaussianKernel.c_str());
+    printf("cilia: epsilon = %g  r_cut = %g epsilon  T_ramp = %g  f_c = %g  f_beat = %g  L_c = %g  relaxScheme = %s\n",
+           epsilon, rcutFactor, T_ramp, f_c, f_beat, L_c, relaxScheme.c_str());
   }
 
   f_old.assign(N_part * 3, 0.0);
+  fstar_old.assign(N_part * 3, 0.0);
 
   if (N_part > 0) {
       o_xpc = platform->device.malloc(N_part * 3 * sizeof(dfloat));
@@ -521,7 +1123,12 @@ void UDF_Setup() {
   }
 
   nrs->userSource = &userForcing;
+  if (couplingIQN) {
+    nrs->preFluid = &ciliaPreFluid;
+    nrs->userConvergenceCheck = &ciliaConverged;
+  }
   interp = new pointInterpolation_t(nrs->meshV, platform->comm.mpiComm());
+  fixAlignedAvgNormals();
 
   dfloat wallArea;
   setupPlaneWeights(wallPlaneZ, o_Wplane, o_WplaneDz, planeArea);
@@ -536,6 +1143,8 @@ void UDF_Setup() {
 }
 
 void UDF_ExecuteStep(double time, int tstep) {
+  if (!nrs->timeStepConverged) return;   // M.6 iqn: nekRS calls this after every corrector
+
   if (diagInterval > 0 && tstep % diagInterval == 0) {
     ptic("udfExecuteStep::diagnostics");
     printDiagnostics(time);

@@ -1,32 +1,39 @@
 # Performance
 
-Baseline for v0.1: `cases/small4`, production settings (N = 5, dt = 1e-4, Navier–Stokes, default solvers), nekRS v26.0.1, one NVIDIA A100, one MPI rank.
+`cases/small4`, nekRS v26.0.1, one NVIDIA A100, one MPI rank. s/cycle is wall time per beat period T, measured over the two-cycle gate runs. Runs were on different A100 nodes, which differ by a few percent.
 
-- **0.021 s per step**, about 3.5 min per beat cycle (10,000 steps).
-- Start-up: several minutes of JIT compilation on a cold cache, ~1 s warm.
+## v0.2: 29 s per cycle
 
-## Where the time goes
+Production settings (`small4.par`): Stokes, BDF2, dt = 1e-3, implicit IQN coupling, ~29 ms per step, **29 s per cycle**. Start-up: several minutes of JIT compilation on a cold cache, ~1 s warm.
 
-2,000 steps with `profileCilia = 1` (the syncs it adds cost ~3%):
+Each step runs on average 2.3 fluid solves (the outer correctors of the IQN coupling). At 2–3 solver iterations per field, a corrector costs a fixed ~10 ms (right-hand side, projection, smoother setup, force spreading), so the number of correctors is now the main lever.
 
-| Part | ms/step | share of solve |
-|---|---|---|
-| Velocity solve (~82 Jacobi-PCG iterations/step) | 16.7 | 70% |
-| Pressure solve (2–3 pMG iterations/step) | 4.2 | 18% |
-| Diagnostics (every step) | 1.2 | 5% |
-| Cilia model (all udf parts below) | 0.58 | 2.4% |
-| › point location `find()` | 0.24 | 1.0% |
-| › force spreading kernel | 0.20 | 0.8% |
-| › velocity interpolation `eval()` | 0.06 | 0.3% |
-| › host ↔ device copies | 0.05 | 0.2% |
-| › host kinematics and drag | 0.03 | 0.1% |
-| Explicit terms, checkpoints, rest | ~1.1 | ~4% |
+## How v0.1 got to v0.2
 
-On this small case the solvers dominate: the velocity Helmholtz problem at μ = 1/Re = 1000 and dt = 1e-4 is diffusion dominated, and Jacobi preconditioning needs many iterations. The cilia model is cheap at 80 panels, but its cost grows with the number of panels (the spreading kernel loops over all of them), so it becomes the bottleneck at scale.
+The solver work (P1) was done on the v0.1 model, then the model was corrected (M), which costs about 4× back, mostly because the implicit coupling needs ~2 solves per step and a smaller dt than the old filtered force.
+
+| Change | s/cycle |
+|---|---|
+| v0.1 baseline: Navier–Stokes, dt = 1e-4, block CG + Jacobi | 210 |
+| velocity initial guess by projection | 136 |
+| pressure Chebyshev degree 2 | 131 |
+| Stokes mode (same cost per step, no CFL limit) | 131 |
+| dt = 2e-3 with a second-order force relaxation | 23.6 |
+| velocity projection with 160 vectors | 14.1 |
+| `slipZ` top (udf workaround) and velocity p-multigrid | 11.4 |
+| velocity tolerance 3e-3 | 9.2 |
+| velocity p-multigrid Chebyshev degree 2 | 8.25 |
+| velocity projection with 40 vectors | 7.50 |
+| pressure tolerance 3e-3 | **7.21** (29× over v0.1) |
+| model: self-flow removal | 7.63 |
+| model: implicit coupling f = f\* (IQN), dt = 1e-3 | 27.2 |
+| model: arclength panels | 28.3 |
+| model: zero-second-moment kernel, ε = 0.1, N_p = 20 | **29.0** |
+
+Every row passed the regression gate against the reference of its model at the time.
 
 ## Next
 
-1. Velocity and pressure solver settings (preconditioner, tolerances, projection).
-2. Stokes mode and a larger time step.
-3. Cheaper diagnostics.
-4. The cilia model on the GPU end to end: neighbour lists for spreading, no per-step host round trips, then multi-GPU scaling to many cilia.
+1. The cilia model on the GPU end to end: neighbour lists for spreading, no per-step host round trips, the self-flow sum on the device. On `small4` the model is a few percent of a step, but the spreading kernel loops over every panel, so it dominates at scale; it is profiled on larger tiled cases.
+2. Fewer or cheaper correctors per step.
+3. Multi-GPU scaling to many cilia.
