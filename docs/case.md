@@ -11,6 +11,10 @@ The cilia model itself is written up in [model.pdf](model.pdf).
 
 Regenerate the layout and box with `python3 make_small4.py --seed 1`; the mesh is `small4.re2` (from `small4.box` with `genbox`).
 
+## `cases/tiled2`, `tiled4`, `tiled8`
+
+The `small4` cell repeated k × k times (k = 2, 4, 8): box k × k × 1.5, 10k × 10k × 12 elements, 4k² cilia (16, 64, 256), same settings as `small4`. `python3 make_tiled.py --k K --seed 1` writes the case (k = 1 reproduces `small4`); the mesh comes from the `.box` with `genbox`. A tiled run is the same flow as `small4` per unit area, so it can be gated against the `small4` reference with `gate.py <log> --per-area K²` (`tiled2` passes). `tiled8` needs ~26 GB of host memory.
+
 ## Reference run
 
 `cases/small4/m8_reference_gauss2.out` holds the `cilia`, `vals` and `wall` lines over t ∈ [1, 2] of `small4` at tighter settings than production: dt = 1e-4, coupling tolerance 1e-5, solver tolerances 1e-4. Production settings pass the gate against it with 8.7e-4 of peak on the worst quantity (∫∂v/∂z), so the margin is small: changes that are meant to keep the answer should be judged with it, and changes to dt or tolerances will show up.

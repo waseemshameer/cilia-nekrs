@@ -1,39 +1,29 @@
 # Performance
 
-`cases/small4`, nekRS v26.0.1, one NVIDIA A100, one MPI rank. s/cycle is wall time per beat period T, measured over the two-cycle gate runs. Runs were on different A100 nodes, which differ by a few percent.
+nekRS v26.0.1, one NVIDIA A100, one MPI rank, N = 5. s/cycle is wall time per beat period T. How each number was reached, change by change, is in [computational.md](computational.md).
 
-## v0.2: 29 s per cycle
+## v0.3
 
-Production settings (`small4.par`): Stokes, BDF2, dt = 1e-3, implicit IQN coupling, ~29 ms per step, **29 s per cycle**. Start-up: several minutes of JIT compilation on a cold cache, ~1 s warm.
+| Case | cilia | elements | s/step | s/cycle | correctors/step | cilia model share |
+|---|---|---|---|---|---|---|
+| `small4` | 4 | 1,200 | 0.030 | ~30 | 2.4 | a few % |
+| `tiled8` | 256 | 76,800 | 1.64 | ~1,640 | 4.6 | 2.8% |
 
-Each step runs on average 2.3 fluid solves (the outer correctors of the IQN coupling). At 2–3 solver iterations per field, a corrector costs a fixed ~10 ms (right-hand side, projection, smoother setup, force spreading), so the number of correctors is now the main lever.
+- Start-up: several minutes of JIT compilation on a cold cache, ~1 s warm. `tiled8` also needs ~8 min of setup and ~26 GB of host memory.
+- The cilia model now scales linearly with the number of cilia: force spreading costs ~35 µs per cilium per corrector.
+- Almost all of the step is the fluid solve, done 2–5 times per step by the implicit force–flow coupling (outer correctors). Each corrector is a full pressure + velocity solve at 2–3 iterations per field.
 
-## How v0.1 got to v0.2
+## History
 
-The solver work (P1) was done on the v0.1 model, then the model was corrected (M), which costs about 4× back, mostly because the implicit coupling needs ~2 solves per step and a smaller dt than the old filtered force.
-
-| Change | s/cycle |
-|---|---|
-| v0.1 baseline: Navier–Stokes, dt = 1e-4, block CG + Jacobi | 210 |
-| velocity initial guess by projection | 136 |
-| pressure Chebyshev degree 2 | 131 |
-| Stokes mode (same cost per step, no CFL limit) | 131 |
-| dt = 2e-3 with a second-order force relaxation | 23.6 |
-| velocity projection with 160 vectors | 14.1 |
-| `slipZ` top (udf workaround) and velocity p-multigrid | 11.4 |
-| velocity tolerance 3e-3 | 9.2 |
-| velocity p-multigrid Chebyshev degree 2 | 8.25 |
-| velocity projection with 40 vectors | 7.50 |
-| pressure tolerance 3e-3 | **7.21** (29× over v0.1) |
-| model: self-flow removal | 7.63 |
-| model: implicit coupling f = f\* (IQN), dt = 1e-3 | 27.2 |
-| model: arclength panels | 28.3 |
-| model: zero-second-moment kernel, ε = 0.1, N_p = 20 | **29.0** |
-
-Every row passed the regression gate against the reference of its model at the time.
+| Version | `small4` s/cycle | `tiled8` cilia share | Main change |
+|---|---|---|---|
+| v0.1 | 210 | | baseline |
+| v0.2, v0.1 model | 7.21 | | solver settings (29×) |
+| v0.2 | 29.0 | ~50% (est.) | corrected model, implicit coupling |
+| v0.3 | ~30 | 2.8% | binned spreading, IQN on the GPU, IQN restart rule |
 
 ## Next
 
-1. The cilia model on the GPU end to end: neighbour lists for spreading, no per-step host round trips, the self-flow sum on the device. On `small4` the model is a few percent of a step, but the spreading kernel loops over every panel, so it dominates at scale; it is profiled on larger tiled cases.
-2. Fewer or cheaper correctors per step.
-3. Multi-GPU scaling to many cilia.
+1. Multi-GPU: each rank keeps only the cilia whose kernels reach its elements, then strong and weak scaling on tiled cases.
+2. Panel kinematics and binning on the device (the last per-step host work).
+3. Fewer correctors per step.

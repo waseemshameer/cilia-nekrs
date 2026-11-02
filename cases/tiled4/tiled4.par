@@ -1,0 +1,51 @@
+userSections = CASEDATA
+
+[GENERAL]
+stopAt = endTime
+endTime = 0.1
+dt = 1.0e-3                     # M.6: f = f* (iqn) passes the gate at 1e-3 (8.7e-4 of peak, int dv/dz), not at 2e-3 (1.4e-3); 27 s/cycle. P1.6 (cn, f_c 1.59): 2e-3
+timeStepper = bdf2              # P1.6: bdf3 is more accurate at 2e-3 but 30% slower per cycle
+udf = ../../3d.udf      # the shared udf at the repo root
+polynomialOrder = 5
+
+checkpointControl = simulationtime
+checkpointInterval = 0.1          # P1.4: each write ~30-60 ms; 0.01 cost ~4 s/cycle vs ~6 s/cycle solve. Set smaller when more frames are needed
+
+[PROBLEMTYPE]
+equation = stokes                # P1.1: passes the gate, same s/step as NS
+
+[FLUID PRESSURE]
+smootherType = fourthoptcheby+asm+degree=2   # P1.5: pressure 71.9 -> 65.4 s per 2 cycles, 1.035x
+residualTol = 3.0e-3             # P1.13: 1e-4 -> 3e-3 cuts pressure 25% (same node), 8.12 -> 7.21 s/cycle ex. checkpointing
+
+[FLUID VELOCITY]
+boundaryTypeMap = wall, slipZ   # P1.8/P1.9: IDs from small4.usr; slipZ needs fixAlignedAvgNormals in 3d.udf (nekRS v26 bug)
+solver = pcg                    # P1.9: pMG (needs the non-block solver) 14.2 -> 11.4 s/cycle
+preconditioner = multigrid
+initialGuess = projectionAconj+nVector=40    # P1.3: projection 1.43x; P1.7: 160 vectors (default 5) 23.6 -> 14.1 s/cycle; P1.12: 40 with degree 2, 8.25 -> 7.50
+residualTol = 3.0e-3             # P1.10: 1e-4 -> 3e-3 gives 11.4 -> 9.2 s/cycle, gate metrics unchanged
+smootherType = fourthoptcheby+jac+degree=2   # P1.11: pMG Chebyshev degree 1 (default) -> 2 gives 9.17 -> 8.25 s/cycle
+density = 1.0
+viscosity = -1.0e-3      # negative = Re; the cilia drag uses this mu = 1/Re too
+
+# Cilia model (read by 3d.udf; units of L and T = 1/f).
+# Any key left out falls back to the value shown (the udf default).
+# nekRS lowercases values, so keep the coordinates filename lowercase.
+[CASEDATA]
+coordinatesFile      = coordinates_tiled4.txt # x_root y_root beta per cilium
+numPanels            = 20                # N_p; M.8: 20 with eps 0.1 (eps / (L/N_p) = 2); M.2: 40 at eps 0.05
+slenderness          = 20                # L/r -> C_par = 2pi/ln(L/r), C_perp = 2 C_par
+gaussianWidth        = 0.1               # epsilon; M.8: 0.1 with gauss2 beats gauss at 0.05 on every global metric at lower cost; M.2: numerical width
+gaussianCutoff       = 3.8               # r_cut / epsilon; M.8: gauss2 loses 3.8e-4 of its mass beyond 3.4, 3.1e-5 beyond 3.8
+gaussianKernel       = gauss2            # M.8: zero-second-moment blob (5/2 - r^2/eps^2) exp(-r^2/eps^2): no O(eps^2/d^3) far-field error; was gauss
+rampTime             = 0.01              # T_ramp
+relaxCutoffFrequency = 1.5915494         # f_c (= 1.59), used only by relaxScheme = cn or euler
+relaxScheme          = none              # M.6: f = f* (f_c = inf, the intended model: M.4); was cn at f_c 1.59 (P1.2), -35% on mean pumping
+subtractSelfFlow     = 1                 # M.3: remove the cilium's own regularised-Stokeslet flow from u (RFT already has it); was 0 (52-61% of RFT drag)
+panelLength          = arclength         # M.5: l_i = L |dxi/ds| / N_p (true arclength, analytic tangent); was uniform L/N_p (-24% wall-pressure rms, -4.6% mean pumping vs uniform)
+beatFrequency        = 1.0               # f / f_ref
+ciliumLength         = 1.0               # L_c / L
+diagnosticInterval   = 1                 # steps between 'time ubar |V|max vals' lines
+couplingScheme       = iqn               # M.6: outer correctors + IQN-ILS (f = f* is unstable with the explicit force); ~2 correctors/step
+couplingTol          = 3e-5              # M.2: 3e-5 at eps 0.05 (1e-4 fails the gate on int dv/dz, coupling-stop jitter; 1e-5 hits the 3e-3 solver floor); M.6: 1e-4 at eps 0.1
+couplingRestart      = 10                # P2.6: a step at 10 correctors drops the earlier steps' secant pairs (reuse 8 alone caps 22 steps on tiled4 at t 0.65; this: 0, 3.8 correctors/step)

@@ -48,3 +48,4 @@ ciliumLength         = 1.0               # L_c / L
 diagnosticInterval   = 1                 # steps between 'time ubar |V|max vals' lines
 couplingScheme       = iqn               # M.6: outer correctors + IQN-ILS (f = f* is unstable with the explicit force); ~2 correctors/step
 couplingTol          = 3e-5              # M.2: 3e-5 at eps 0.05 (1e-4 fails the gate on int dv/dz, coupling-stop jitter; 1e-5 hits the 3e-3 solver floor); M.6: 1e-4 at eps 0.1
+couplingRestart      = 10                # P2.6: a step at 10 correctors drops the earlier steps' secant pairs (reuse 8 alone caps 22 steps on tiled4 at t 0.65; this: 0, 3.8 correctors/step)

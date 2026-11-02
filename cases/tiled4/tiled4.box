@@ -1,0 +1,13 @@
+-3                     spatial dimension (will create box.re2)
+1                      number of fields
+#
+#    comments: tiled4, 64 cilia, small4 tiled 4 x 4, periodic 4 x 4 x 1.5 (make_tiled.py)
+#
+#========================================================
+#
+Box
+-40 -40 -12                               Nelx  Nely Nelz
+-2 2 1.0                              x0 x1 ratio
+-2 2 1.0                              y0 y1 ratio
+0.0 1.5 1.0                               z0 z1 ratio
+P  ,P  ,P  ,P  ,W  ,SYM                   Velocity BC's:  (cbx0, cbx1, cby0, cby1, cbz0, cbz1)

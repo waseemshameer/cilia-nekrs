@@ -65,9 +65,19 @@ dfloat couplingTol = 1e-4;        // relative 2-norm residual |f* - F| / |f*| ov
 int    couplingMaxIter = 50;      // correctors per step; a step that hits it is counted and the last F is kept
 dfloat couplingOmega = 0.2;       // under-relaxation of the first update when there are no secant pairs yet
 int    couplingReuse = 8;         // IQN-ILS(q): keep the secant pairs of the last q steps
+int    couplingRestart = 0;       // P2.6: > 0: a step that reaches this many correctors drops the earlier steps'
+                                  // pairs and goes on with its own, which are kept ('iqnrestart' line); 0 = off
 dfloat couplingFilter = 1e-3;     // QR filter: drop a secant column whose orthogonal part is < filter * its norm
 bool   couplingIQN = false;
+double tilePeriod = 0;           // P2: > 0 prints 'tileasym' lines: |F - F shifted by one tile| / |F| in x and y (tiled cases, tile = 1)
 int    iqnVerbose = 0;            // P1.14: 1 prints the residual of every corrector ('iqnres' lines: time, corrector, |f* - F|/|f*|)
+// P2.1: spatial binning of the force spreading. Panels are sorted into a uniform x-y-z grid of bins (width
+// ~binWidth r_cut, periodic in x and y) once per panel position; each element visits only the bins within r_cut of
+// its bounding box. 0 = the brute-force loop over all panels (same result to round-off)
+int    ciliaBinning = 1;
+dfloat binWidth = 0.5;            // target bin width / r_cut (the bins tile the box exactly, so slightly wider)
+int    binningCheck = 0;          // > 0: the first binningCheck spreads also run brute force; 'bincheck' lines
+int    iqnCheck = 0;              // P2.2: > 0: the first iqnCheck correctors also run the host H and MGS update; 'iqncheck' lines
 int    forcingCalls = 0;
 
 // Derived at setup
@@ -196,6 +206,264 @@ void ptoc(const std::string &tag) {
   }
 }
 
+// P2.1: the same spreading, but element e visits only the panels in its bins. elemBins[e*6 + 0..5] = first x bin,
+// number of x bins (wrapping, < nbx or = nbx from 0), first y bin, number of y bins, first and last z bin.
+// Bin b = (iz nby + iy) nbx + ix holds the panels binPanel[binStart[b] .. binStart[b+1]); x bins of one (iy, iz)
+// row are contiguous, so a row is at most two panel ranges (two when the x range wraps)
+@kernel void addCiliaForceBinned(const dlong Nelements,
+                                 const dlong fieldOffset,
+                                 const int nbx,
+                                 const int nby,
+                                 @restrict const int *elemBins,
+                                 @restrict const int *binStart,
+                                 @restrict const int *binPanel,
+                                 @restrict const dfloat *xpc,
+                                 @restrict const dfloat *fpanel,
+                                 const dfloat epsinv2,
+                                 const dfloat rcut2,
+                                 const dfloat invnorm,
+                                 const int kernel2,
+                                 const dfloat Lx,
+                                 const dfloat Ly,
+                                 @restrict const dfloat *x,
+                                 @restrict const dfloat *y,
+                                 @restrict const dfloat *z,
+                                 const int useJw,
+                                 @restrict const dfloat *Jw,
+                                 @restrict dfloat *FU) {
+
+  for(dlong e=0; e<Nelements; ++e; @outer(0)){
+    for(int n=0; n<p_Np; ++n; @inner(0)){
+      const dlong id = e*p_Np + n;
+      const dfloat px = x[id], py = y[id], pz = z[id];
+      const int ix0 = elemBins[e*6 + 0], nx = elemBins[e*6 + 1];
+      const int iy0 = elemBins[e*6 + 2], ny = elemBins[e*6 + 3];
+      const int iz0 = elemBins[e*6 + 4], iz1 = elemBins[e*6 + 5];
+
+      dfloat fx = 0.0, fy = 0.0, fz = 0.0;
+
+      for(int iz=iz0; iz<=iz1; ++iz){
+        for(int jy=0; jy<ny; ++jy){
+          int iy = iy0 + jy;
+          if (iy >= nby) iy -= nby;
+          const int row = (iz*nby + iy)*nbx;
+          for(int seg=0; seg<2; ++seg){
+            const int b0 = (seg == 0) ? ix0 : 0;
+            const int b1 = (seg == 0) ? min(ix0 + nx, nbx) : ix0 + nx - nbx;   // exclusive
+            if (b1 <= b0) continue;
+            const int j1 = binStart[row + b1];
+            for(int j=binStart[row + b0]; j<j1; ++j){
+              const int i = binPanel[j];
+              dfloat dy = py - xpc[i*3 + 1];
+              dy -= Ly * floor(dy / Ly + 0.5);
+              dfloat dy2 = dy * dy;
+              if (dy2 >= rcut2) continue;
+
+              dfloat dx = px - xpc[i*3 + 0];
+              dx -= Lx * floor(dx / Lx + 0.5);
+              dfloat dx2 = dx * dx;
+              dfloat rem = rcut2 - dy2;
+              if (dx2 >= rem) continue;
+
+              dfloat dz = pz - xpc[i*3 + 2];
+              dfloat dz2 = dz * dz;
+              rem = rem - dx2;
+              if (dz2 >= rem) continue;
+
+              dfloat r2 = dx2 + dy2 + dz2;
+              dfloat delta = exp(-r2 * epsinv2) * invnorm;
+              if (kernel2) delta *= 2.5 - r2 * epsinv2;
+
+              fx += fpanel[i*3 + 0] * delta;
+              fy += fpanel[i*3 + 1] * delta;
+              fz += fpanel[i*3 + 2] * delta;
+            }
+          }
+        }
+      }
+
+      if (useJw) {
+        const dfloat w = Jw[id];
+        fx *= w; fy *= w; fz *= w;
+      }
+
+      FU[id + 0 * fieldOffset] += fx;
+      FU[id + 1 * fieldOffset] += fy;
+      FU[id + 2 * fieldOffset] += fz;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// P2.2: the iqn corrector on the device. Per panel ii (one thread): u from eval (-999 in all three = lost), minus
+// the own cilium's free-space regularised-Stokeslet flow of F (subtractSelfFlow 1, same formula as regStokeslet),
+// then H = R mu l (C_par V_par + C_perp V_perp), V = V_cilia - u (0 when lost). H goes to pool[oH + 3 ii + c]
+// ---------------------------------------------------------------------------
+@kernel void ciliaPanelForce(const int N_part,
+                             const int N_p,
+                             @restrict const dfloat *xpc,
+                             @restrict const dfloat *Vc,
+                             @restrict const dfloat *TL,
+                             @restrict const dfloat *upc,
+                             @restrict const dfloat *F,
+                             const int selfFlow,
+                             const dfloat R,
+                             const dfloat mu,
+                             const dfloat Cpar,
+                             const dfloat Cperp,
+                             const dfloat eps,
+                             const int kernel2,
+                             const dfloat pi,
+                             const dlong oH,
+                             @restrict dfloat *pool) {
+  for(int b=0; b<(N_part + 63)/64; ++b; @outer(0)){
+    for(int t=0; t<64; ++t; @inner(0)){
+      const int ii = b*64 + t;
+      if (ii < N_part) {
+        dfloat ux = upc[ii], uy = upc[ii + N_part], uz = upc[ii + 2*N_part];
+        dfloat hx = 0.0, hy = 0.0, hz = 0.0;
+        if (ux != -999.0 || uy != -999.0 || uz != -999.0) {
+          if (selfFlow) {
+            const int k0 = (ii / N_p) * N_p;
+            dfloat us0 = 0.0, us1 = 0.0, us2 = 0.0;
+            for(int j=0; j<N_p; ++j){
+              const int jj = k0 + j;
+              const dfloat d0 = xpc[ii*3 + 0] - xpc[jj*3 + 0];
+              const dfloat d1 = xpc[ii*3 + 1] - xpc[jj*3 + 1];
+              const dfloat d2 = xpc[ii*3 + 2] - xpc[jj*3 + 2];
+              const dfloat r = sqrt(d0*d0 + d1*d1 + d2*d2);
+              dfloat a, bb;
+              if (r < 1e-3 * eps) {
+                a = (kernel2 ? 1.5 : 1.0) / (3.0 * pow(pi, 1.5) * eps);
+                bb = 0.0;
+              } else {
+                const dfloat E = erf(r / eps), ex = exp(-r * r / (eps * eps));
+                dfloat G = E / (4.0 * pi * r);
+                dfloat Bp = ((0.5 * r * r - 0.25 * eps * eps) * E + eps * r * ex / (2.0 * sqrt(pi))) / (4.0 * pi * r * r);
+                if (kernel2) {
+                  const dfloat Gp = (2.0 * r * ex / (sqrt(pi) * eps) - E) / (4.0 * pi * r * r);
+                  G += 0.25 * ex / (pow(pi, 1.5) * eps);
+                  Bp -= 0.25 * eps * eps * Gp;
+                }
+                a = G - Bp / r;
+                bb = 3.0 * Bp / r - G;
+              }
+              const dfloat f0 = F[jj*3 + 0], f1 = F[jj*3 + 1], f2 = F[jj*3 + 2];
+              const dfloat Fdotd = f0*d0 + f1*d1 + f2*d2;
+              const dfloat s = (r > 0) ? bb * Fdotd / (r * r) : 0.0;
+              us0 += a * f0 + s * d0;
+              us1 += a * f1 + s * d1;
+              us2 += a * f2 + s * d2;
+            }
+            ux -= us0 / mu; uy -= us1 / mu; uz -= us2 / mu;
+          }
+          const dfloat Vx = Vc[ii*3 + 0] - ux, Vy = Vc[ii*3 + 1] - uy, Vz = Vc[ii*3 + 2] - uz;
+          const dfloat tx = TL[ii*4 + 0], ty = TL[ii*4 + 1], tz = TL[ii*4 + 2];
+          const dfloat Vdt = Vx*tx + Vy*ty + Vz*tz;
+          const dfloat Vpx = Vdt * tx, Vpy = Vdt * ty, Vpz = Vdt * tz;
+          const dfloat scale = R * mu * TL[ii*4 + 3];
+          hx = scale * (Cpar*Vpx + Cperp*(Vx - Vpx));
+          hy = scale * (Cpar*Vpy + Cperp*(Vy - Vpy));
+          hz = scale * (Cpar*Vpz + Cperp*(Vz - Vpz));
+        }
+        pool[oH + ii*3 + 0] = hx;
+        pool[oH + ii*3 + 1] = hy;
+        pool[oH + ii*3 + 2] = hz;
+      }
+    }
+  }
+}
+
+// r = H - F; with a new secant pair also dR = r - r_prev, dX = H - H_prev (all n-vectors in the pool, o* = slot n)
+@kernel void iqnResidual(const int n,
+                         const int doPair,
+                         const dlong oH,
+                         const dlong oR,
+                         const dlong oHp,
+                         const dlong oRp,
+                         const dlong oDR,
+                         const dlong oDX,
+                         @restrict const dfloat *F,
+                         @restrict dfloat *pool) {
+  for(int b=0; b<(n + 255)/256; ++b; @outer(0)){
+    for(int t=0; t<256; ++t; @inner(0)){
+      const int m = b*256 + t;
+      if (m < n) {
+        const dfloat h = pool[oH + m];
+        const dfloat r = h - F[m];
+        pool[oR + m] = r;
+        if (doPair) {
+          pool[oDR + m] = r - pool[oRp + m];
+          pool[oDX + m] = h - pool[oHp + m];
+        }
+      }
+    }
+  }
+}
+
+// Dot products of pool slot pairs (pa[p], pb[p]), each split into nChunk ranges: part[p nChunk + c]
+// (the host sums the chunks in order, so the result is deterministic)
+@kernel void iqnPoolDots(const int n,
+                         const int nPairs,
+                         const int nChunk,
+                         @restrict const int *pa,
+                         @restrict const int *pb,
+                         @restrict const dfloat *pool,
+                         @restrict dfloat *part) {
+  for(int p=0; p<nPairs; ++p; @outer(1)){
+    for(int c=0; c<nChunk; ++c; @outer(0)){
+      @shared dfloat s[256];
+      for(int t=0; t<256; ++t; @inner(0)){
+        const dlong oa = (dlong)pa[p] * n, ob = (dlong)pb[p] * n;
+        const int len = (n + nChunk - 1) / nChunk;
+        const int m0 = c * len;
+        const int m1 = (m0 + len < n) ? m0 + len : n;
+        dfloat acc = 0.0;
+        for(int m=m0 + t; m<m1; m+=256) acc += pool[oa + m] * pool[ob + m];
+        s[t] = acc;
+      }
+      @barrier();
+      for(int t=0; t<256; ++t; @inner(0)){ if (t < 128) s[t] += s[t + 128]; }
+      @barrier();
+      for(int t=0; t<256; ++t; @inner(0)){ if (t < 64) s[t] += s[t + 64]; }
+      @barrier();
+      for(int t=0; t<256; ++t; @inner(0)){ if (t < 32) s[t] += s[t + 32]; }
+      @barrier();
+      for(int t=0; t<256; ++t; @inner(0)){ if (t < 16) s[t] += s[t + 16]; }
+      @barrier();
+      for(int t=0; t<256; ++t; @inner(0)){ if (t < 8) s[t] += s[t + 8]; }
+      @barrier();
+      for(int t=0; t<256; ++t; @inner(0)){ if (t < 4) s[t] += s[t + 4]; }
+      @barrier();
+      for(int t=0; t<256; ++t; @inner(0)){ if (t < 2) s[t] += s[t + 2]; }
+      @barrier();
+      for(int t=0; t<256; ++t; @inner(0)){ if (t == 0) part[p*nChunk + c] = s[0] + s[1]; }
+    }
+  }
+}
+
+// out = a0 base + sum_j coef[j] pool[slot j]; base = pool slot oBase, or out itself when oBase < 0 (not read if a0 = 0)
+@kernel void iqnCombine(const int n,
+                        const dfloat a0,
+                        const dlong oBase,
+                        const int q,
+                        @restrict const int *slots,
+                        @restrict const dfloat *coef,
+                        @restrict const dfloat *pool,
+                        dfloat *out) {
+  for(int b=0; b<(n + 255)/256; ++b; @outer(0)){
+    for(int t=0; t<256; ++t; @inner(0)){
+      const int m = b*256 + t;
+      if (m < n) {
+        dfloat v = 0.0;
+        if (a0 != 0.0) v = a0 * ((oBase >= 0) ? pool[oBase + m] : out[m]);
+        for(int j=0; j<q; ++j) v += coef[j] * pool[(dlong)slots[j] * n + m];
+        out[m] = v;
+      }
+    }
+  }
+}
+
 // P1.4: all diagnostics in one pass, one partial result per element (printDiagnostics sums them).
 // out[e*10 + q]: q = 0 int u dV, 1..8 the 'wall' integrals (printDiagnostics order), 9 max |V|.
 @kernel void diagReduce(const dlong Nelements,
@@ -290,8 +558,15 @@ void readCaseData() {
   platform->par->extract("casedata", "couplingmaxiter", couplingMaxIter);
   platform->par->extract("casedata", "couplingomega", couplingOmega);
   platform->par->extract("casedata", "couplingreuse", couplingReuse);
+  platform->par->extract("casedata", "couplingrestart", couplingRestart);
   platform->par->extract("casedata", "couplingfilter", couplingFilter);
   platform->par->extract("casedata", "iqnverbose", iqnVerbose);
+  platform->par->extract("casedata", "tileperiod", tilePeriod);
+  platform->par->extract("casedata", "ciliabinning", ciliaBinning);
+  platform->par->extract("casedata", "binwidth", binWidth);
+  platform->par->extract("casedata", "binningcheck", binningCheck);
+  platform->par->extract("casedata", "iqncheck", iqnCheck);
+  nekrsCheck(binWidth <= 0, platform->comm.mpiComm(), EXIT_FAILURE, "binWidth = %g; must be > 0\n", binWidth);
   couplingIQN = (couplingScheme == "iqn");
   nekrsCheck(!couplingIQN && couplingScheme != "explicit", platform->comm.mpiComm(), EXIT_FAILURE,
              "couplingScheme = %s; use explicit or iqn\n", couplingScheme.c_str());
@@ -538,7 +813,134 @@ void panelKinematics(double time, std::vector<dfloat> &x_pc, std::vector<dfloat>
   }
 }
 
+// ---------------------------------------------------------------------------
+// P2.1 binning. Uniform bins over the box: nbx x nby periodic, nbz from the mesh z range (panels outside it go
+// into the end bins, which every element whose range reaches past that end also visits). Per element (static
+// mesh) the bins within r_cut of its bounding box; per panel position a stable counting sort (host, while the
+// kinematics are on the host: P2.2 moves both to the device), so each bin's panels stay in index order.
+// ---------------------------------------------------------------------------
+int nbx = 1, nby = 1, nbz = 1;
+dfloat hbx, hby, hbz, zlo;
+std::vector<int> binStart, binPanel;
+occa::memory o_elemBins, o_binStart, o_binPanel;
+occa::memory o_chkA, o_chkB;   // binningCheck spare fields
+int binChecks = 0;
+
+void setupBins() {
+  auto mesh = nrs->meshV;
+  const dfloat rcut = sqrt(rcut2);
+  const dfloat h = binWidth * rcut;
+  zlo = platform->linAlg->min(mesh->Nlocal, mesh->o_z, platform->comm.mpiComm());
+  const dfloat Lz = platform->linAlg->max(mesh->Nlocal, mesh->o_z, platform->comm.mpiComm()) - zlo;
+  nbx = std::max(1, (int)std::floor(Lx / h));
+  nby = std::max(1, (int)std::floor(Ly / h));
+  nbz = std::max(1, (int)std::floor(Lz / h));
+  hbx = Lx / nbx; hby = Ly / nby; hbz = Lz / nbz;
+
+  std::vector<dfloat> X(mesh->Nlocal), Y(mesh->Nlocal), Z(mesh->Nlocal);
+  mesh->o_x.copyTo(X.data(), mesh->Nlocal);
+  mesh->o_y.copyTo(Y.data(), mesh->Nlocal);
+  mesh->o_z.copyTo(Z.data(), mesh->Nlocal);
+  // Bin range of [lo - r_cut, hi + r_cut] (a small margin against round-off at bin edges)
+  const dfloat pad = rcut * (1.0 + 1e-6);
+  auto periodicRange = [](dfloat lo, dfloat hi, dfloat o, dfloat hb, int nb, int &first, int &count) {
+    const int a = (int)std::floor((lo - o) / hb), b = (int)std::floor((hi - o) / hb);
+    count = b - a + 1;
+    if (count >= nb) { first = 0; count = nb; }
+    else first = ((a % nb) + nb) % nb;
+  };
+  std::vector<int> eb(mesh->Nelements * 6);
+  long visited = 0;
+  for (dlong e = 0; e < mesh->Nelements; e++) {
+    dfloat lo[3] = {1e300, 1e300, 1e300}, hi[3] = {-1e300, -1e300, -1e300};
+    for (int n = 0; n < mesh->Np; n++) {
+      const dlong id = e * mesh->Np + n;
+      const dfloat p[3] = {X[id], Y[id], Z[id]};
+      for (int d = 0; d < 3; d++) { lo[d] = std::min(lo[d], p[d]); hi[d] = std::max(hi[d], p[d]); }
+    }
+    int *b = &eb[e * 6];
+    periodicRange(lo[0] - pad, hi[0] + pad, xmin, hbx, nbx, b[0], b[1]);
+    periodicRange(lo[1] - pad, hi[1] + pad, ymin, hby, nby, b[2], b[3]);
+    b[4] = std::clamp((int)std::floor((lo[2] - pad - zlo) / hbz), 0, nbz - 1);
+    b[5] = std::clamp((int)std::floor((hi[2] + pad - zlo) / hbz), 0, nbz - 1);
+    visited += (long)b[1] * b[3] * (b[5] - b[4] + 1);
+  }
+  if (mesh->Nelements > 0) {
+    o_elemBins = platform->device.malloc<int>(eb.size());
+    o_elemBins.copyFrom(eb.data());
+  }
+  binStart.assign(nbx * nby * nbz + 1, 0);
+  binPanel.assign(N_part, 0);
+  o_binStart = platform->device.malloc<int>(binStart.size());
+  o_binPanel = platform->device.malloc<int>(N_part);
+
+  MPI_Allreduce(MPI_IN_PLACE, &visited, 1, MPI_LONG, MPI_SUM, platform->comm.mpiComm());
+  long nel = mesh->Nelements;
+  MPI_Allreduce(MPI_IN_PLACE, &nel, 1, MPI_LONG, MPI_SUM, platform->comm.mpiComm());
+  if (platform->comm.mpiRank() == 0)
+    printf("cilia: binning = %d  bins %d x %d x %d (%.4g x %.4g x %.4g; r_cut = %.4g)  mean bins per element %.1f"
+           "  binningCheck = %d\n", ciliaBinning, nbx, nby, nbz, hbx, hby, hbz, rcut,
+           nel > 0 ? (double)visited / nel : 0.0, binningCheck);
+}
+
+// Stable counting sort of the (wrapped) panel positions into the bins
+void binPanels(const std::vector<dfloat> &px, const std::vector<dfloat> &py, const std::vector<dfloat> &pz) {
+  if (!ciliaBinning && !binningCheck) return;
+  ptic("udfSource::binPanels");
+  std::vector<int> bin(N_part);
+  std::fill(binStart.begin(), binStart.end(), 0);
+  for (int m = 0; m < N_part; m++) {
+    const int ix = std::clamp((int)std::floor((px[m] - xmin) / hbx), 0, nbx - 1);
+    const int iy = std::clamp((int)std::floor((py[m] - ymin) / hby), 0, nby - 1);
+    const int iz = std::clamp((int)std::floor((pz[m] - zlo) / hbz), 0, nbz - 1);
+    bin[m] = (iz * nby + iy) * nbx + ix;
+    binStart[bin[m] + 1]++;
+  }
+  for (size_t b = 1; b < binStart.size(); b++) binStart[b] += binStart[b - 1];
+  std::vector<int> next(binStart.begin(), binStart.end() - 1);
+  for (int m = 0; m < N_part; m++) binPanel[next[bin[m]]++] = m;
+  o_binStart.copyFrom(binStart.data());
+  o_binPanel.copyFrom(binPanel.data());
+  ptoc("udfSource::binPanels");
+}
+
+void launchSpread(bool binned, int useJw, occa::memory &o_FU) {
+  auto mesh = nrs->meshV;
+  if (binned) {
+    if (mesh->Nelements == 0) return;
+    addCiliaForceBinned(mesh->Nelements, nrs->fluid->fieldOffset, nbx, nby, o_elemBins, o_binStart, o_binPanel,
+                        o_xpc, o_f, epsinv2, rcut2, invnorm, kernel2, Lx, Ly, mesh->o_x, mesh->o_y, mesh->o_z,
+                        useJw, mesh->o_Jw, o_FU);
+  } else {
+    addCiliaForce(mesh->Nelements, nrs->fluid->fieldOffset, N_part, o_xpc, o_f, epsinv2, rcut2, invnorm, kernel2,
+                  Lx, Ly, mesh->o_x, mesh->o_y, mesh->o_z, useJw, mesh->o_Jw, o_FU);
+  }
+}
+
+// Spread the panel forces o_f at o_xpc onto the mesh and add them to o_FU (times Jw if useJw).
+// binningCheck: the first calls also compare binned and brute force on zeroed spare fields
+void spreadForces(int useJw, occa::memory &o_FU) {
+  if (binChecks < binningCheck) {
+    binChecks++;
+    const dlong n3 = 3 * nrs->fluid->fieldOffset;
+    if (!o_chkA.isInitialized()) { o_chkA = platform->device.malloc<dfloat>(n3); o_chkB = platform->device.malloc<dfloat>(n3); }
+    platform->linAlg->fill(n3, 0.0, o_chkA);
+    platform->linAlg->fill(n3, 0.0, o_chkB);
+    launchSpread(true, useJw, o_chkA);
+    launchSpread(false, useJw, o_chkB);
+    const dlong N = nrs->meshV->Nlocal, off = nrs->fluid->fieldOffset;
+    const dfloat err = platform->linAlg->maxAbsoluteError(N, 3, off, -1.0, o_chkA, o_chkB, platform->comm.mpiComm());
+    const dfloat ref = platform->linAlg->amaxMany(N, 3, off, o_chkB, platform->comm.mpiComm());
+    if (platform->comm.mpiRank() == 0)
+      printf("%d %.3e %.3e %.3e  bincheck\n", binChecks, err, ref, ref > 0 ? err / ref : 0.0);
+  }
+  ptic("udfSource::addCiliaForce");
+  launchSpread(ciliaBinning, useJw, o_FU);
+  ptoc("udfSource::addCiliaForce");
+}
+
 void locatePanels(const std::vector<dfloat> &px, const std::vector<dfloat> &py, const std::vector<dfloat> &pz) {
+  binPanels(px, py, pz);
   ptic("udfSource::copyPoints");
   o_px.copyFrom(px.data());
   o_py.copyFrom(py.data());
@@ -731,12 +1133,8 @@ void userForcing(double time) {
     printf("\n");
   }
 
-  ptic("udfSource::addCiliaForce");
-  addCiliaForce(nrs->meshV->Nelements, nrs->fluid->fieldOffset, N_part,
-                   o_xpc, o_f, epsinv2, rcut2, invnorm, kernel2, Lx, Ly,
-                   nrs->meshV->o_x, nrs->meshV->o_y, nrs->meshV->o_z,
-                   0, nrs->meshV->o_Jw, nrs->fluid->o_explicitTerms());
-  ptoc("udfSource::addCiliaForce");
+  occa::memory o_FU = nrs->fluid->o_explicitTerms();
+  spreadForces(0, o_FU);
 }
 
 // ---------------------------------------------------------------------------
@@ -749,13 +1147,64 @@ void userForcing(double time) {
 // ---------------------------------------------------------------------------
 occa::memory o_JwF0;                                  // o_JwF without the cilia force, saved at corrector 1
 std::vector<dfloat> iqnX, iqnV, iqnTL;                // panel positions, velocities, tangents and lengths at t_{n+1}
-std::vector<dfloat> iqnF, iqnHprev, iqnRprev;         // applied F^k; H, r of the previous corrector
-std::vector<std::vector<dfloat>> iqnDR, iqnDX;        // this step's secant pairs, oldest first
-std::vector<std::vector<std::vector<dfloat>>> iqnOldDR, iqnOldDX;   // earlier steps' pairs, newest step first
-std::vector<std::vector<dfloat>> iqnFconv;            // converged F of the last steps, newest first (predictor)
+occa::memory o_V, o_TL;                               // P2.2: the same on the device (o_xpc holds the positions)
+// P2.2: the iterate lives on the device. F^k is o_f; every other n-vector (n = 3 N_part) is a slot of one pool:
+// fixed slots r, H of this corrector, r, H of the previous one (swapped each corrector), H of the converged step
+// (restart file) and the converged F of the last steps (predictor); the rest hold secant pairs (dR, dX) from a free
+// list. The QR of the secant columns is replaced by their Gram matrix G (dR_a . dR_b by slot, one new row per
+// corrector): a Cholesky in the same newest-first order with the same filter gives the same R (L = R^T) and
+// Q^T r = R^-T (dR^T r), so a corrector costs O(q n) on the device instead of O(q^2 n) on the host
+occa::memory o_pool;
+int poolCap = 0;
+const int maxFconv = 3;
+const int nFixedSlots = 8;
+int sR = 0, sH = 1, sRp = 2, sHp = 3, sHconv = 4, sFconv[maxFconv] = {5, 6, 7};
+int nFconv = 0;                                       // EXT order, set at the first step
+std::vector<int> freeSlots;
+std::vector<double> iqnG;                             // poolCap x poolCap; entries between dR slots only
+std::vector<std::pair<int, int>> iqnCur;              // this step's secant pairs (dR slot, dX slot), oldest first
+std::vector<std::vector<std::pair<int, int>>> iqnOld; // earlier steps' pairs, newest step first
+occa::memory o_dotA, o_dotB, o_dotPart, o_cSlots, o_cCoef;   // staging for iqnPoolDots and iqnCombine
+int iqnChecks = 0;
 double iqnTime = 0;
 dfloat iqnR = 0;
-long iqnItersSum = 0, iqnSteps = 0, iqnMaxed = 0;
+long iqnItersSum = 0, iqnSteps = 0, iqnMaxed = 0, iqnRestarts = 0;
+
+// P2 diagnostic: how far the panel forces are from tile-periodic. partner[d][k] is the cilium whose root is
+// cilium k's root shifted by one tile in x (d = 0) or y (d = 1), wrapped into the box; -1 if none
+std::vector<int> tilePartner[2];
+void tileAsymmetry(double time, const std::vector<dfloat> &F) {
+  if (tilePartner[0].empty()) {
+    for (int d = 0; d < 2; d++) {
+      tilePartner[d].assign(N_cilia, -1);
+      for (int k = 0; k < N_cilia; k++) {
+        double x = xc[k] + (d == 0 ? tilePeriod : 0), y = yc[k] + (d == 1 ? tilePeriod : 0);
+        x = xmin + fmod(fmod(x - xmin, Lx) + Lx, Lx);
+        y = ymin + fmod(fmod(y - ymin, Ly) + Ly, Ly);
+        for (int j = 0; j < N_cilia; j++) {
+          double dx = fabs(xc[j] - x), dy = fabs(yc[j] - y);
+          dx = std::min(dx, Lx - dx); dy = std::min(dy, Ly - dy);
+          if (dx < 1e-9 && dy < 1e-9) { tilePartner[d][k] = j; break; }
+        }
+      }
+    }
+  }
+  double a[2] = {0, 0}, fn = 0;
+  for (int k = 0; k < N_cilia; k++)
+    for (int m = 0; m < N_p * 3; m++) {
+      const double f = F[k * N_p * 3 + m];
+      fn += f * f;
+      for (int d = 0; d < 2; d++) {
+        const int j = tilePartner[d][k];
+        if (j < 0) continue;
+        const double df = f - F[j * N_p * 3 + m];
+        a[d] += df * df;
+      }
+    }
+  const double s = fn > 0 ? 1.0 / sqrt(fn) : 0.0;
+  if (platform->comm.mpiRank() == 0)
+    printf("%.10e %.3e %.3e  tileasym\n", time, sqrt(a[0]) * s, sqrt(a[1]) * s);
+}
 
 dfloat vdot(const std::vector<dfloat> &a, const std::vector<dfloat> &b) {
   dfloat s = 0.0;
@@ -763,99 +1212,90 @@ dfloat vdot(const std::vector<dfloat> &a, const std::vector<dfloat> &b) {
   return s;
 }
 
-// nrs->preFluid: before each corrector's fluid solve
-void ciliaPreFluid(double time, int tstep) {
-  if (N_part == 0 || !couplingIQN) return;
-  const int iter = nrs->outerCorrector;
-
-  if (iter == 1) {
-    if (restoreForceHistory) {
-      readForceHistory(time);
-      restoreForceHistory = false;
-    }
-    iqnTime = time;
-    iqnR = std::min((dfloat)1.0, (dfloat)(time / T_ramp));
-    std::vector<dfloat> px, py, pz;
-    panelKinematics(time, iqnX, iqnV, iqnTL, px, py, pz);
-    locatePanels(px, py, pz);
-    o_xpc.copyFrom(iqnX.data());
-
-    // Predictor: extrapolate the converged forces with nekRS's EXT coefficients for this step
-    std::vector<dfloat> c_ext(nrs->o_coeffEXT.size());
-    nrs->o_coeffEXT.copyTo(c_ext.data());
-    if (iqnFconv.empty()) iqnFconv.assign(c_ext.size(), f_old);
-    iqnF.assign(N_part * 3, 0.0);
-    for (size_t h = 0; h < c_ext.size(); h++)
-      for (int m = 0; m < N_part * 3; m++) iqnF[m] += c_ext[h] * iqnFconv[h][m];
-
-    iqnDR.clear();
-    iqnDX.clear();
-    if (!o_JwF0.isInitialized()) o_JwF0 = platform->device.malloc<dfloat>(nrs->fluid->o_JwF.size());   // typed: size() counts dfloats
-    o_JwF0.copyFrom(nrs->fluid->o_JwF);
-  }
-
-  nrs->fluid->o_JwF.copyFrom(o_JwF0);
-  o_f.copyFrom(iqnF.data());
-  addCiliaForce(nrs->meshV->Nelements, nrs->fluid->fieldOffset, N_part,
-                o_xpc, o_f, epsinv2, rcut2, invnorm, kernel2, Lx, Ly,
-                nrs->meshV->o_x, nrs->meshV->o_y, nrs->meshV->o_z,
-                1, nrs->meshV->o_Jw, nrs->fluid->o_JwF);
+// P2.2 pool helpers. Slots keep their index when the pool grows (doubling)
+void poolReserve(int cap) {
+  const int n = 3 * N_part;
+  if (cap <= poolCap) return;
+  nekrsCheck((double)cap * n >= 2147483647.0, platform->comm.mpiComm(), EXIT_FAILURE,
+             "IQN pool of %d x %d exceeds the int index range\n", cap, n);
+  occa::memory o_new = platform->device.malloc<dfloat>((size_t)cap * n);
+  if (poolCap > 0) o_new.copyFrom(o_pool, (size_t)poolCap * n);
+  o_pool = o_new;
+  std::vector<double> G((size_t)cap * cap, 0.0);
+  for (int a = 0; a < poolCap; a++)
+    for (int b = 0; b < poolCap; b++) G[(size_t)a * cap + b] = iqnG[(size_t)a * poolCap + b];
+  iqnG.swap(G);
+  for (int s = cap - 1; s >= std::max(poolCap, nFixedSlots); s--) freeSlots.push_back(s);
+  poolCap = cap;
 }
 
-// nrs->userConvergenceCheck: after each corrector's fluid solve; true ends the step
-bool ciliaConverged(int iter) {
-  if (N_part == 0 || !couplingIQN) return true;
+int newSlot() {
+  if (freeSlots.empty()) poolReserve(2 * poolCap);
+  const int s = freeSlots.back();
+  freeSlots.pop_back();
+  return s;
+}
 
-  std::vector<dfloat> u_pc = samplePanelVelocity();
-  if (subtractSelfFlow == 1) subtractOwnFlow(u_pc, iqnX, {iqnF}, {iqnX}, {1.0});
-  const std::vector<dfloat> H = rftForce(iqnTL, iqnV, u_pc, iqnR);
-  const int n = N_part * 3;
-  std::vector<dfloat> r(n);
-  for (int m = 0; m < n; m++) r[m] = H[m] - iqnF[m];
-  const dfloat rn = sqrt(vdot(r, r)), Hn = sqrt(vdot(H, H));
+void freePairs(const std::vector<std::pair<int, int>> &P) {
+  for (const auto &p : P) { freeSlots.push_back(p.first); freeSlots.push_back(p.second); }
+}
 
-  if (iter > 1) {
-    std::vector<dfloat> dr(n), dx(n);
-    for (int m = 0; m < n; m++) { dr[m] = r[m] - iqnRprev[m]; dx[m] = H[m] - iqnHprev[m]; }
-    iqnDR.push_back(dr);
-    iqnDX.push_back(dx);
-  }
+double &iqnGram(int a, int b) { return iqnG[(size_t)a * poolCap + b]; }
 
-  const bool converged = rn <= couplingTol * Hn;
-  if (iqnVerbose && platform->comm.mpiRank() == 0)
-    printf("%.10e %d %.3e  iqnres\n", iqnTime, iter, Hn > 0 ? rn / Hn : 0.0);
-  if (converged || iter >= couplingMaxIter) {
-    for (int h = (int)iqnFconv.size() - 1; h > 0; h--) iqnFconv[h].swap(iqnFconv[h - 1]);
-    iqnFconv[0] = iqnF;
-    f_old = iqnF;      // the force the converged u came from (restart file)
-    fstar_old = H;
-    if (couplingReuse > 0) {
-      iqnOldDR.insert(iqnOldDR.begin(), iqnDR);
-      iqnOldDX.insert(iqnOldDX.begin(), iqnDX);
-      if ((int)iqnOldDR.size() > couplingReuse) { iqnOldDR.pop_back(); iqnOldDX.pop_back(); }
-    }
-    iqnItersSum += iter;
-    iqnSteps++;
-    if (!converged) iqnMaxed++;
-    if (platform->comm.mpiRank() == 0)
-      printf("%.10e %d %.3e %ld  iqn\n", iqnTime, iter, Hn > 0 ? rn / Hn : 0.0, iqnMaxed);
-    return true;
-  }
-  iqnRprev = r;
-  iqnHprev = H;
+template <typename T> void ensureSize(occa::memory &o, size_t count) {
+  if (!o.isInitialized() || o.size() < count) o = platform->device.malloc<T>(std::max(count, (size_t)256));
+}
 
-  // Secant columns, newest first: this step's, then the earlier steps'. QR by modified Gram-Schmidt (twice),
-  // dropping columns that are nearly dependent on the newer ones
-  std::vector<const std::vector<dfloat>*> candR, candX;
-  for (int j = (int)iqnDR.size() - 1; j >= 0; j--) { candR.push_back(&iqnDR[j]); candX.push_back(&iqnDX[j]); }
-  for (size_t s = 0; s < iqnOldDR.size(); s++)
-    for (int j = (int)iqnOldDR[s].size() - 1; j >= 0; j--) { candR.push_back(&iqnOldDR[s][j]); candX.push_back(&iqnOldDX[s][j]); }
+std::vector<dfloat> poolGet(int s) {
+  std::vector<dfloat> v(3 * N_part);
+  o_pool.copyTo(v.data(), v.size(), (size_t)s * v.size());
+  return v;
+}
 
-  std::vector<std::vector<dfloat>> Q;
-  std::vector<std::vector<dfloat>> Rm;   // Rm[j] = column j of R (length j + 1)
+// Dot products of pool slots A[p] . B[p] on the device; the chunk partials are summed on the host in order
+std::vector<double> poolDots(const std::vector<int> &A, const std::vector<int> &B) {
+  const int n = 3 * N_part, np = A.size();
+  const int nChunk = std::max(1, std::min(64, (n + 4095) / 4096));
+  ensureSize<int>(o_dotA, np);
+  ensureSize<int>(o_dotB, np);
+  ensureSize<dfloat>(o_dotPart, (size_t)np * nChunk);
+  o_dotA.copyFrom(A.data(), np);
+  o_dotB.copyFrom(B.data(), np);
+  iqnPoolDots(n, np, nChunk, o_dotA, o_dotB, o_pool, o_dotPart);
+  std::vector<dfloat> part((size_t)np * nChunk);
+  o_dotPart.copyTo(part.data(), part.size());
+  std::vector<double> d(np, 0.0);
+  for (int p = 0; p < np; p++)
+    for (int c = 0; c < nChunk; c++) d[p] += part[(size_t)p * nChunk + c];
+  return d;
+}
+
+// out = a0 base + sum_j coef[j] slot_j, base = pool slot baseSlot or out itself (baseSlot < 0)
+void poolCombine(occa::memory &o_out, dfloat a0, int baseSlot, const std::vector<int> &slots,
+                 const std::vector<dfloat> &coef) {
+  const int n = 3 * N_part, q = slots.size();
+  ensureSize<int>(o_cSlots, std::max(q, 1));
+  ensureSize<dfloat>(o_cCoef, std::max(q, 1));
+  if (q > 0) { o_cSlots.copyFrom(slots.data(), q); o_cCoef.copyFrom(coef.data(), q); }
+  iqnCombine(n, a0, baseSlot >= 0 ? (dlong)baseSlot * n : (dlong)-1, q, o_cSlots, o_cCoef, o_pool, o_out);
+}
+
+dfloat relMaxDiff(const std::vector<dfloat> &a, const std::vector<dfloat> &ref) {
+  dfloat d = 0.0, m = 0.0;
+  for (size_t i = 0; i < a.size(); i++) { d = std::max(d, (dfloat)std::abs(a[i] - ref[i])); m = std::max(m, (dfloat)std::abs(ref[i])); }
+  return m > 0 ? d / m : d;
+}
+
+// The pre-P2.2 host update, kept for iqnCheck: QR of the candidate columns (newest first) by modified Gram-Schmidt
+// (twice), dropping columns nearly dependent on the newer ones; F = H + W c, c = -R^{-1} Q^T r, or F + omega r
+std::vector<dfloat> iqnSolveMGS(const std::vector<std::vector<dfloat>> &candR, const std::vector<std::vector<dfloat>> &candX,
+                                const std::vector<dfloat> &r, const std::vector<dfloat> &H, const std::vector<dfloat> &F,
+                                int &q) {
+  const int n = r.size();
+  std::vector<std::vector<dfloat>> Q, Rm;   // Rm[j] = column j of R (length j + 1)
   std::vector<const std::vector<dfloat>*> W;
   for (size_t j = 0; j < candR.size() && (int)Q.size() < n; j++) {
-    std::vector<dfloat> w = *candR[j];
+    std::vector<dfloat> w = candR[j];
     const dfloat vn = sqrt(vdot(w, w));
     if (vn == 0.0) continue;
     std::vector<dfloat> rc(Q.size() + 1, 0.0);
@@ -871,23 +1311,227 @@ bool ciliaConverged(int iter) {
     rc[Q.size()] = wn;
     Q.push_back(w);
     Rm.push_back(rc);
-    W.push_back(candX[j]);
+    W.push_back(&candX[j]);
   }
-
+  q = Q.size();
+  std::vector<dfloat> out;
   if (Q.empty()) {
-    for (int m = 0; m < n; m++) iqnF[m] += couplingOmega * r[m];
+    out = F;
+    for (int m = 0; m < n; m++) out[m] += couplingOmega * r[m];
   } else {
-    // c = -R^{-1} Q^T r, F = H + W c
-    const int q = Q.size();
     std::vector<dfloat> c(q);
     for (int i = 0; i < q; i++) c[i] = -vdot(Q[i], r);
     for (int i = q - 1; i >= 0; i--) {
       for (int j = i + 1; j < q; j++) c[i] -= Rm[j][i] * c[j];
       c[i] /= Rm[i][i];
     }
-    iqnF = H;
+    out = H;
     for (int j = 0; j < q; j++)
-      for (int m = 0; m < n; m++) iqnF[m] += c[j] * (*W[j])[m];
+      for (int m = 0; m < n; m++) out[m] += c[j] * (*W[j])[m];
+  }
+  return out;
+}
+
+// nrs->preFluid: before each corrector's fluid solve
+void ciliaPreFluid(double time, int tstep) {
+  if (N_part == 0 || !couplingIQN) return;
+  const int iter = nrs->outerCorrector;
+  const int n = 3 * N_part;
+
+  if (iter == 1) {
+    if (restoreForceHistory) {
+      readForceHistory(time);
+      restoreForceHistory = false;
+    }
+    iqnTime = time;
+    iqnR = std::min((dfloat)1.0, (dfloat)(time / T_ramp));
+    std::vector<dfloat> px, py, pz;
+    ptic("udfSource::kinematics");   // P2.2: includes the uploads of x, V and t, l
+    panelKinematics(time, iqnX, iqnV, iqnTL, px, py, pz);
+    o_xpc.copyFrom(iqnX.data());
+    o_V.copyFrom(iqnV.data());
+    o_TL.copyFrom(iqnTL.data());
+    ptoc("udfSource::kinematics");
+    locatePanels(px, py, pz);
+
+    // Predictor: extrapolate the converged forces with nekRS's EXT coefficients for this step
+    std::vector<dfloat> c_ext(nrs->o_coeffEXT.size());
+    nrs->o_coeffEXT.copyTo(c_ext.data());
+    if (poolCap == 0) poolReserve(nFixedSlots + 8 * (couplingReuse + 1));
+    if (nFconv == 0) {   // first step (or restart): f_old is zero or the restored force
+      nFconv = c_ext.size();
+      nekrsCheck(nFconv > maxFconv, platform->comm.mpiComm(), EXIT_FAILURE, "EXT order %d > %d\n", nFconv, maxFconv);
+      for (int h = 0; h < nFconv; h++) o_pool.copyFrom(f_old.data(), n, (size_t)sFconv[h] * n);
+    }
+    poolCombine(o_f, 0.0, -1, std::vector<int>(sFconv, sFconv + nFconv), c_ext);
+
+    freePairs(iqnCur);   // empty: a step ends by moving them to iqnOld
+    iqnCur.clear();
+    if (!o_JwF0.isInitialized()) o_JwF0 = platform->device.malloc<dfloat>(nrs->fluid->o_JwF.size());   // typed: size() counts dfloats
+    o_JwF0.copyFrom(nrs->fluid->o_JwF);
+  }
+
+  ptic("udfSource::copyForces");
+  nrs->fluid->o_JwF.copyFrom(o_JwF0);
+  ptoc("udfSource::copyForces");
+  spreadForces(1, nrs->fluid->o_JwF);
+}
+
+// nrs->userConvergenceCheck: after each corrector's fluid solve; true ends the step
+bool ciliaConverged(int iter) {
+  if (N_part == 0 || !couplingIQN) return true;
+  const int n = 3 * N_part;
+  const bool check = iqnChecks < iqnCheck;
+  if (check) iqnChecks++;
+
+  ptic("udfSource::eval");
+  platform->linAlg->fill(n, -999.0, o_upc);
+  interp->eval(nrs->meshV->dim, nrs->fluid->fieldOffset, nrs->fluid->o_U, N_part, o_upc, N_part);
+  ptoc("udfSource::eval");
+
+  ptic("udfSource::panelForce");   // P2.2: includes the self-flow subtraction (was udfSource::selfFlow, host)
+  const dfloat pi = 4.0 * atan(1.0);
+  ciliaPanelForce(N_part, N_p, o_xpc, o_V, o_TL, o_upc, o_f, subtractSelfFlow == 1 ? 1 : 0, iqnR, mu_hat, C_par,
+                  C_perp, epsilon, kernel2, pi, (dlong)sH * n, o_pool);
+  ptoc("udfSource::panelForce");
+
+  // iqnCheck: the host path (eval copy, subtractOwnFlow, rftForce) on the same u and F
+  dfloat errH = 0.0;
+  std::vector<dfloat> Fhost;
+  if (check) {
+    std::vector<dfloat> u(n);
+    o_upc.copyTo(u.data(), n);
+    Fhost.resize(n);
+    o_f.copyTo(Fhost.data(), n);
+    if (subtractSelfFlow == 1) subtractOwnFlow(u, iqnX, {Fhost}, {iqnX}, {1.0});
+    errH = relMaxDiff(poolGet(sH), rftForce(iqnTL, iqnV, u, iqnR));
+  }
+
+  ptic("udfSource::iqnUpdate");   // residual, history, least squares, update; stopped on both returns
+  int sDR = 0, sDX = 0;
+  if (iter > 1) { sDR = newSlot(); sDX = newSlot(); }
+  iqnResidual(n, iter > 1 ? 1 : 0, (dlong)sH * n, (dlong)sR * n, (dlong)sHp * n, (dlong)sRp * n, (dlong)sDR * n,
+              (dlong)sDX * n, o_f, o_pool);
+  if (iter > 1) iqnCur.push_back({sDR, sDX});
+
+  // One launch: r.r, H.H, r.dR for every live column, and the new dR with every live column (a new row of G)
+  std::vector<int> live;
+  for (const auto &p : iqnCur) live.push_back(p.first);
+  for (const auto &s : iqnOld) for (const auto &p : s) live.push_back(p.first);
+  std::vector<int> A = {sR, sH}, B = {sR, sH};
+  for (int s : live) { A.push_back(sR); B.push_back(s); }
+  if (iter > 1) for (int s : live) { A.push_back(sDR); B.push_back(s); }
+  const std::vector<double> d = poolDots(A, B);
+  const size_t nl = live.size();
+  std::vector<double> rdot(poolCap, 0.0);   // r . dR by slot
+  for (size_t j = 0; j < nl; j++) rdot[live[j]] = d[2 + j];
+  if (iter > 1)
+    for (size_t j = 0; j < nl; j++) iqnGram(sDR, live[j]) = iqnGram(live[j], sDR) = d[2 + nl + j];
+  const dfloat rn = sqrt(d[0]), Hn = sqrt(d[1]);
+
+  const bool converged = rn <= couplingTol * Hn;
+  if (iqnVerbose && platform->comm.mpiRank() == 0)
+    printf("%.10e %d %.3e  iqnres\n", iqnTime, iter, Hn > 0 ? rn / Hn : 0.0);
+  if (converged || iter >= couplingMaxIter) {
+    for (int h = nFconv - 1; h > 0; h--) std::swap(sFconv[h], sFconv[h - 1]);
+    o_pool.copyFrom(o_f, n, (size_t)sFconv[0] * n, 0);   // the force the converged u came from (restart file: f_old)
+    std::swap(sH, sHconv);                               // its H (fstar_old)
+    if (couplingReuse > 0) {
+      iqnOld.insert(iqnOld.begin(), iqnCur);
+      if ((int)iqnOld.size() > couplingReuse) { freePairs(iqnOld.back()); iqnOld.pop_back(); }
+    } else {
+      freePairs(iqnCur);
+    }
+    iqnCur.clear();
+    iqnItersSum += iter;
+    iqnSteps++;
+    if (!converged) iqnMaxed++;
+    if (tilePeriod > 0) {
+      std::vector<dfloat> F(n);
+      o_f.copyTo(F.data(), n);
+      tileAsymmetry(iqnTime, F);
+    }
+    if (platform->comm.mpiRank() == 0) {
+      printf("%.10e %d %.3e %ld  iqn\n", iqnTime, iter, Hn > 0 ? rn / Hn : 0.0, iqnMaxed);
+      if (check) printf("%d %d %.3e %.3e %d %d  iqncheck\n", iqnChecks, iter, errH, 0.0, -1, -1);
+    }
+    ptoc("udfSource::iqnUpdate");
+    return true;
+  }
+
+  // P2.6 restart: the earlier steps' pairs have gone stale (the Jacobian moved); go on with this step's only
+  if (couplingRestart > 0 && iter == couplingRestart) {
+    for (const auto &s : iqnOld) freePairs(s);
+    iqnOld.clear();
+    iqnRestarts++;
+    if (platform->comm.mpiRank() == 0) printf("%.10e %d %ld  iqnrestart\n", iqnTime, iter, iqnRestarts);
+  }
+
+  // Secant columns, newest first: this step's, then the earlier steps'
+  std::vector<std::pair<int, int>> cand;
+  for (int j = (int)iqnCur.size() - 1; j >= 0; j--) cand.push_back(iqnCur[j]);
+  for (const auto &s : iqnOld)
+    for (int j = (int)s.size() - 1; j >= 0; j--) cand.push_back(s[j]);
+
+  // Filtered Cholesky of G in that order: column j is kept if its part orthogonal to the kept newer ones,
+  // sqrt(G_jj - |l|^2), is at least couplingFilter |dR_j| (the MGS test)
+  std::vector<int> keptR, keptX;
+  std::vector<std::vector<double>> L;   // L[i] = row i of R^T (length i + 1)
+  for (const auto &p : cand) {
+    if ((int)keptR.size() >= n) break;
+    const double g = iqnGram(p.first, p.first);
+    if (g == 0.0) continue;
+    const size_t q = keptR.size();
+    std::vector<double> l(q + 1);
+    double dd = g;
+    for (size_t i = 0; i < q; i++) {
+      double v = iqnGram(p.first, keptR[i]);
+      for (size_t m = 0; m < i; m++) v -= L[i][m] * l[m];
+      l[i] = v / L[i][i];
+      dd -= l[i] * l[i];
+    }
+    if (!(dd > 0.0) || sqrt(dd) < couplingFilter * sqrt(g)) continue;
+    l[q] = sqrt(dd);
+    L.push_back(l);
+    keptR.push_back(p.first);
+    keptX.push_back(p.second);
+  }
+
+  std::vector<dfloat> Fref;
+  int qMGS = 0;
+  if (check) {
+    std::vector<std::vector<dfloat>> cR, cX;
+    for (const auto &p : cand) { cR.push_back(poolGet(p.first)); cX.push_back(poolGet(p.second)); }
+    Fref = iqnSolveMGS(cR, cX, poolGet(sR), poolGet(sH), Fhost, qMGS);
+  }
+
+  const int q = keptR.size();
+  if (q == 0) {
+    poolCombine(o_f, 1.0, -1, {sR}, {couplingOmega});
+  } else {
+    // z = Q^T r = R^-T (dR^T r); c = -R^-1 z; F = H + dX c
+    std::vector<double> z(q), c(q);
+    for (int i = 0; i < q; i++) {
+      double v = rdot[keptR[i]];
+      for (int m = 0; m < i; m++) v -= L[i][m] * z[m];
+      z[i] = v / L[i][i];
+    }
+    for (int i = q - 1; i >= 0; i--) {
+      double v = -z[i];
+      for (int j = i + 1; j < q; j++) v -= L[j][i] * c[j];
+      c[i] = v / L[i][i];
+    }
+    poolCombine(o_f, 1.0, sH, keptX, std::vector<dfloat>(c.begin(), c.end()));
+  }
+  std::swap(sR, sRp);
+  std::swap(sH, sHp);
+  ptoc("udfSource::iqnUpdate");
+
+  if (check) {
+    std::vector<dfloat> F(n);
+    o_f.copyTo(F.data(), n);
+    if (platform->comm.mpiRank() == 0)
+      printf("%d %d %.3e %.3e %d %d  iqncheck\n", iqnChecks, iter, errH, relMaxDiff(F, Fref), q, qMGS);
   }
   return false;
 }
@@ -1095,9 +1739,11 @@ void UDF_Setup() {
              rodAxis.c_str(), rodVelocity.c_str(), rodCentreZ);
     printf("cilia: subtractSelfFlow = %d  dumpPanelSteps = %d  panelLength = %s\n", subtractSelfFlow, dumpPanelSteps,
            panelLength.c_str());
-    printf("cilia: couplingScheme = %s  tol = %g  maxIter = %d  omega = %g  reuse = %d  filter = %g%s\n",
-           couplingScheme.c_str(), couplingTol, couplingMaxIter, couplingOmega, couplingReuse, couplingFilter,
+    printf("cilia: couplingScheme = %s  tol = %g  maxIter = %d  omega = %g  reuse = %d  restart = %d  filter = %g%s\n",
+           couplingScheme.c_str(), couplingTol, couplingMaxIter, couplingOmega, couplingReuse, couplingRestart, couplingFilter,
            couplingIQN ? "; 'iqn' lines: time, correctors, |f* - F|/|f*|, steps at maxIter so far" : "");
+    if (couplingIQN && iqnCheck > 0)
+      printf("cilia: iqnCheck = %d ('iqncheck' lines: call, corrector, max|H - H_host|/max|H_host|, max|F - F_MGS|/max|F_MGS|, columns kept: Gram, MGS)\n", iqnCheck);
     printf("cilia: gaussianKernel = %s\n", gaussianKernel.c_str());
     printf("cilia: epsilon = %g  r_cut = %g epsilon  T_ramp = %g  f_c = %g  f_beat = %g  L_c = %g  relaxScheme = %s\n",
            epsilon, rcutFactor, T_ramp, f_c, f_beat, L_c, relaxScheme.c_str());
@@ -1107,12 +1753,16 @@ void UDF_Setup() {
   fstar_old.assign(N_part * 3, 0.0);
 
   if (N_part > 0) {
-      o_xpc = platform->device.malloc(N_part * 3 * sizeof(dfloat));
-      o_f   = platform->device.malloc(N_part * 3 * sizeof(dfloat));
-      o_px  = platform->device.malloc(N_part * sizeof(dfloat));
-      o_py  = platform->device.malloc(N_part * sizeof(dfloat));
-      o_pz  = platform->device.malloc(N_part * sizeof(dfloat));
-      o_upc = platform->device.malloc(N_part * 3 * sizeof(dfloat));
+      // P2.1: typed, so size() counts dfloats: pointInterpolation_t::setPoints takes nPoints = o_px.size(), and the
+      // untyped (byte) buffers made find() search 8 N_part points, 7 N_part of them read past the end (tiled8 crash)
+      o_xpc = platform->device.malloc<dfloat>(N_part * 3);
+      o_f   = platform->device.malloc<dfloat>(N_part * 3);
+      o_px  = platform->device.malloc<dfloat>(N_part);
+      o_py  = platform->device.malloc<dfloat>(N_part);
+      o_pz  = platform->device.malloc<dfloat>(N_part);
+      o_upc = platform->device.malloc<dfloat>(N_part * 3);
+      o_V   = platform->device.malloc<dfloat>(N_part * 3);
+      o_TL  = platform->device.malloc<dfloat>(N_part * 4);
   }
 
   if (platform->options.getArgs("RESTART FILE NAME").empty()) {
@@ -1128,6 +1778,7 @@ void UDF_Setup() {
     nrs->userConvergenceCheck = &ciliaConverged;
   }
   interp = new pointInterpolation_t(nrs->meshV, platform->comm.mpiComm());
+  if (N_part > 0) setupBins();
   fixAlignedAvgNormals();
 
   dfloat wallArea;
@@ -1161,6 +1812,10 @@ void UDF_ExecuteStep(double time, int tstep) {
   } else if (nrs->checkpointStep) {
     nrs->copyToNek(time, tstep);
     nek::userchk();
+    if (couplingIQN && nFconv > 0) {   // P2.2: the converged F and its H live on the device
+      o_pool.copyTo(f_old.data(), f_old.size(), (size_t)sFconv[0] * f_old.size());
+      o_pool.copyTo(fstar_old.data(), fstar_old.size(), (size_t)sHconv * fstar_old.size());
+    }
     writeForceHistory(time);
   }
 }

@@ -8,7 +8,7 @@ Each cilium is an actuator filament: a chain of panels that follows a prescribed
 
 **The model is written up in [docs/model.pdf](docs/model.pdf)** (equations, kernels, coupling, the benchmark case and its verification).
 
-The current focus is GPU performance and scaling toward very large numbers of cilia. v0.2 tunes the solvers (≈ 29× faster on the v0.1 model) and corrects the cilia model.
+The current focus is GPU performance and scaling toward very large numbers of cilia. v0.2 tuned the solvers (≈ 29× faster on the v0.1 model) and corrected the cilia model; v0.3 moves the cilia model onto the GPU so its cost grows linearly with the number of cilia (2.8% of the step at 256 cilia). **How each speed-up was made and what it bought: [docs/computational.md](docs/computational.md).**
 
 ## Quick start
 
@@ -32,9 +32,10 @@ python3 ../../gate.py small4.log          # PASS if every quantity is within 0.1
 |---|---|
 | `3d.udf` | The cilia model: beat kinematics, RFT drag, self-flow removal, spreading kernel, IQN coupling, diagnostics |
 | `cases/small4/` | Benchmark: 4 cilia in a periodic 1 × 1 × 1.5 box, 1,200 elements, N = 5 |
+| `cases/tiled{2,4,8}/`, `cases/make_tiled.py` | `small4` tiled k × k: 16, 64, 256 cilia, for profiling at scale |
 | `gate.py` | Regression gate against the `small4` reference run |
 | `job_template.sh` | Generic Slurm script; adapt it to your cluster |
-| `docs/` | [The model (PDF)](docs/model.pdf), [running](docs/running.md), [the case](docs/case.md), [performance](docs/performance.md) |
+| `docs/` | [The model (PDF)](docs/model.pdf), [running](docs/running.md), [the case](docs/case.md), [performance](docs/performance.md), [computational work and speed-ups](docs/computational.md) |
 
 ## Citing and acknowledgements
 

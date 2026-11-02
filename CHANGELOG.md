@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.0 (2026-11-02)
+
+The cilia model on the GPU at scale. Same model and same answer as v0.2 (`small4` passes the gate against the v0.2 reference); on the 256-cilium `tiled8` case the cilia model drops from about half of every step to 2.8%, and its cost is now linear in the number of cilia.
+
+- **Binned force spreading** (`addCiliaForceBinned`, on by default; `ciliaBinning = 0` keeps the old all-pairs kernel). Panels are sorted into bins of about half the kernel cut-off each step, and each element visits only nearby bins. 38× faster spreading on `tiled8`, equal to the all-pairs result to round-off.
+- **IQN corrector on the GPU:** self-flow subtraction and resistive-force theory in one panel kernel; the IQN iterate and all secant pairs in a device pool; the least-squares update through a small Gram matrix instead of a host QR. IQN update 122× faster on `tiled8`; same result as the host path to round-off.
+- **IQN restart rule** `couplingRestart = 10` (set in all case pars): a step that needs 10 correctors drops the older steps' secant pairs. Fixes a coupling breakdown on large cases (every step at the 50-corrector cap) and is the fastest setting tried.
+- **Fix:** untyped panel coordinate buffers made nekRS's point search take 8× too many points (crash on large cases).
+- New checks `binningCheck = K` and `iqnCheck = K` ([CASEDATA]): run the old path alongside the first K calls and print the difference.
+- New cases `cases/tiled2`, `tiled4`, `tiled8` (16, 64, 256 cilia; 4,800, 19,200, 76,800 elements) and their generator `cases/make_tiled.py`. `gate.py --per-area k²` gates a tiled run against `small4`.
+- New document [docs/computational.md](docs/computational.md): how a step is computed, every speed-up from v0.1 to v0.3 with its measured gain, and a figure.
+
 ## v0.2.0 (2026-11-01)
 
 Solver tuning and a corrected cilia model. `small4` now runs a beat cycle in about 29 s on one A100, against 210 s in v0.1, and the model it runs is a different (corrected) one, so results are not comparable with v0.1.
