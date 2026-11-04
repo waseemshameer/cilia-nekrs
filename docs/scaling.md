@@ -40,11 +40,11 @@ So n0.8 lies between 2.4M and 4.8M on up to 4 GPUs, and it isn't named yet. Load
 
 ## Under test
 
-In this order, because each one changes the balance between compute and communication. Progress is in the [open Issues](https://github.com/waseemshameer/cilia-nekrs/issues).
+In this order, because each one changes the balance between compute and communication.
 
-1. **GPU-aware MPI**, as above.
-2. **Whole-solver FP32:** the separate `nekrs-fp32` binary (`CMakeLists.txt:155`, Discussion [#626](https://github.com/Nek5000/nekRS/discussions/626)). The gate decides.
-3. **Velocity solver on 4 GPUs:** `pcg` + Jacobi, and 20 projection vectors. Any winner must also pass the gate on `small4`.
+1. **GPU-aware MPI**, as above ([#3](https://github.com/waseemshameer/cilia-nekrs/issues/3)).
+2. **Whole-solver FP32:** the separate `nekrs-fp32` binary (`CMakeLists.txt:155`, Discussion [#626](https://github.com/Nek5000/nekRS/discussions/626)). The gate decides ([#4](https://github.com/waseemshameer/cilia-nekrs/issues/4)).
+3. **Velocity solver on 4 GPUs:** `pcg` + Jacobi, and 20 projection vectors. Any winner must also pass the gate on `small4` ([#5](https://github.com/waseemshameer/cilia-nekrs/issues/5)).
 
 ## Advice we checked and didn't adopt
 
