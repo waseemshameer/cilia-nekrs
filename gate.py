@@ -11,7 +11,10 @@
 # Both series are compared on the coarser of the two time grids (np.interp onto those times).
 # --per-area A divides the run's wall integrals by A (A = k^2 for a k x k tiled case vs small4; ubar, |V|max are intensive).
 # |V|max jumps between nodes, so it is gated on its cycle integral; the pointwise max is printed as info.
-import argparse, os, sys
+# The run must also come from the nekRS commit in NEKRS_VERSION: the SHA in the log header has to match, and a log
+# with no SHA fails, because its version can't be confirmed. References are trimmed logs without a header, so only
+# the run is checked.
+import argparse, os, re, sys
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -43,7 +46,7 @@ def read(f):
     out = {}
     for k, v in d.items():
         v = np.array(v)
-        if len(v) == 0: sys.exit('%s: no %s lines' % (f, k))
+        if len(v) == 0: sys.exit('%s: no %s lines' % (os.path.basename(f), k))
         _, i = np.unique(v[:, 0], return_index=True)   # drop repeats after a restart
         out[k] = v[np.sort(i)]
     return out
@@ -51,12 +54,18 @@ def read(f):
 def window(t):
     return (t >= T0 - 1e-9) & (t <= T1 + 1e-9)
 
+def log_shas(f):
+    return sorted(set(re.findall(r'\(sha:([0-9a-f]+)\)', open(f, errors='replace').read())))   # a restarted log can hold several
+
 run, ref = read(a.run), read(a.ref)
 run['wall'][:, 1:] /= a.per_area
 print('gate: %s\n  ref: %s\n  window t in [%g, %g]; of peak: L2 <= %.2g, Linf <= %.2g (|V|max: cycle int <= %.2g)\n'
-      % (a.run, a.ref, T0, T1, a.tol_l2, a.tol_max, a.tol_int))
+      % (os.path.basename(a.run), os.path.basename(a.ref), T0, T1, a.tol_l2, a.tol_max, a.tol_int))
+want = open(os.path.join(HERE, 'NEKRS_VERSION')).read().split()[1]
+shas = log_shas(a.run)
+ok = shas == [want]
+print('nekRS sha: log %s, NEKRS_VERSION %s  %s\n' % (', '.join(shas) or 'none', want, 'PASS' if ok else 'FAIL'))
 print('%-22s %10s %10s %13s %8s' % ('metric', 'L2/peak', 'Linf/peak', 'rel cycle int', 'result'))
-ok = True
 for name, tag, c, pointwise in METRICS:
     tr, yr = ref[tag][:, 0], ref[tag][:, c]
     tc, yc = run[tag][:, 0], run[tag][:, c]

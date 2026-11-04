@@ -15,7 +15,7 @@ cd cases/small4
 nrsmpi small4 1                      # 1 MPI rank = 1 GPU
 ```
 
-On a Slurm cluster, edit `job_template.sh` (partition, modules, `NEKRS_HOME`) and submit it from the case directory: `sbatch ../../job_template.sh small4`. It also sets up a shared JIT cache so new run directories do not recompile.
+On a Slurm cluster, adapt the `#SBATCH` lines of `job_template.sh`, put modules and `NEKRS_HOME` in a `cluster.env` in the submit directory (optional), and submit from the case directory: `sbatch ../../job_template.sh small4`. The log is `small4.out`. The script's header shows how to run several cases on one node and how to set the ranks per run. It also sets up a shared JIT cache so new run directories do not recompile.
 
 ## Model parameters
 
@@ -85,6 +85,8 @@ Convergence is about second order. A Richardson estimate puts N_p = 40's own err
 python3 gate.py <run log>             # vs cases/small4/reference.out
 python3 gate.py <run log> --ref <other reference .out>
 ```
+
+The run must use the nekRS commit in `NEKRS_VERSION`: the gate fails if the SHA in the log header differs or is missing.
 
 It compares cycle 2 (t ∈ [1, 2]) of `small4`, so the run must reach t = 2. A metric passes two tests, each relative to that metric's own reference peak: the cycle L2 of run − ref (the square root of the cycle mean of the squared difference) is ≤ 2e-4 (`--tol-l2`), and max |run − ref| over the cycle is ≤ 2e-3 (`--tol-max`). The second catches isolated bad steps, which L2 dilutes. |V|max is instead gated on its cycle integral, within 1e-3 (`--tol-int`). Exit code 0 means every metric passed.
 

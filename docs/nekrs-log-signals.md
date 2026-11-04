@@ -2,7 +2,7 @@
 
 Checked 2026-11-01 against logs of our own runs (all regexes below were run on them; counts in the last section) and the nekRS source (abbrev `N/`). Those logs are not in this repository.
 
-Python: `F = r'[-+]?\d+\.\d+(?:[eE][-+]?\d+)?'` (a float as printed by `%e`/`%.3f`). Match on `line.rstrip('\n')`, use `re.search` / `re.match`. Everything goes to stdout in the single SLURM `-o %x_%j.out` file, in order (udf printf and nekRS printf interleave correctly). Only rank 0 prints in the 1-GPU runs.
+Python: `F = r'[-+]?\d+\.\d+(?:[eE][-+]?\d+)?'` (a float as printed by `%e`/`%.3f`). Match on `line.rstrip('\n')`, use `re.search` / `re.match`. Everything goes to stdout in the run's `<case>.out` file, in order (udf printf and nekRS printf interleave correctly). Only rank 0 prints in the 1-GPU runs.
 
 ## 1. Per-step lines (nekRS)
 
@@ -44,7 +44,7 @@ Non-finite residual inside CG/GMRES aborts through `nekrsCheck` (section 4): `cg
 
 ## 3. Cilia udf diagnostic lines (parsed by gate.py)
 
-`gate.py:34-40` splits on whitespace and keys on the last token (`vals` / `wall`), `float()` on the rest.
+`read()` in `gate.py` splits on whitespace and keys on the last token (`vals` / `wall`), `float()` on the rest.
 
 | Signal | Regex | Real example | Source |
 |---|---|---|---|
