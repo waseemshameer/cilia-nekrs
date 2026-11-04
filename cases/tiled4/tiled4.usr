@@ -1,4 +1,4 @@
-c small4: nekRS zero.usr template + boundary IDs in usrdat2 (P1.8)
+c small4: nekRS zero.usr template + boundary IDs in usrdat2
 c-----------------------------------------------------------------------
 c  nek5000 user-file template
 c
@@ -144,7 +144,7 @@ c      implicit none
 c-----------------------------------------------------------------------
       subroutine usrdat2()  ! This routine to modify mesh coordinates
 
-c     P1.8: boundary IDs for the par boundaryTypeMap (genbox has none).
+c     boundary IDs for the par boundaryTypeMap (genbox has none).
 c     Bottom wall 'W  ' -> 1 (wall), top 'SYM' -> 2 (slipZ, aligned, so
 c     the non-block velocity solver and pMG are allowed). Periodic: 0.
 

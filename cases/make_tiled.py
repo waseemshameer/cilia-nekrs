@@ -1,11 +1,11 @@
 """
-make_tiled.py: the small4 tile repeated k x k times, for profiling at scale (ROADMAP P4.1).
+make_tiled.py: the small4 tile repeated k x k times, for profiling at scale.
 
 Box k x k x 1.5 (x, y in [-k/2, k/2]), 10k x 10k x 12 elements, P,P,P,P,W,SYM. Each tile is the
 small4 patch (same seed, same draws and options as make_small4.py) shifted to the tile centre.
 --rerandomize keeps tile (0, 0) as small4 and gives every other tile its own cell direction
-alpha ~ N(0, 25 deg) (patch and beat turned together, M.7); check those for crossings between
-tiles with model_checks/m7_distances.py. k = 1 reproduces small4 (same box lines and coordinates).
+alpha ~ N(0, 25 deg) (patch and beat turned together); check those for crossings between
+tiles with studies/cilia_distances.py. k = 1 reproduces small4 (same box lines and coordinates).
 
     python3 make_tiled.py --k 4 --seed 1  -> tiled4/{coordinates_tiled4.txt, tiled4.box, tiled4.par, tiled4.usr}
 

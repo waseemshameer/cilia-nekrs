@@ -10,7 +10,7 @@ All timings are wall time on one NVIDIA A100 with one MPI rank, nekRS v26.0.1, p
 
 ## 1. What a time step does
 
-The flow is Stokes flow in a periodic box above a no-slip wall, solved with nekRS's spectral-element solver. The cilia are actuator filaments: each cilium is a chain of N_p = 20 panels that follows a prescribed beat. Every time step:
+The flow is Stokes flow in a periodic box above a no-slip wall, solved with nekRS's spectral-element solver. The cilia are actuator filaments: each cilium is a chain of N_p = 40 panels that follows a prescribed beat. Every time step:
 
 1. **Kinematics.** Each panel's position, velocity and tangent at the new time come from the beat shape.
 2. **Point location.** nekRS's `findpts` locates every panel centre in the mesh (element and local coordinates).

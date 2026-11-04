@@ -41,7 +41,7 @@
 \noindent
 \texttt{cilia-nekrs} simulates the flow pumped by a carpet of beating cilia with the GPU spectral-element code nekRS.
 Each cilium is an \emph{actuator filament}: a chain of panels that moves with a prescribed beat and pushes on the fluid with a resistive-force-theory drag, spread onto the grid as a smooth body force.
-This note states the model as it is implemented in \code{3d.udf}: the beat kinematics, the drag law, the removal of each filament's own flow from the sampled velocity, the regularised spreading kernel, and the implicit coupling of panel forces and flow by interface quasi-Newton iterations.
+This note states the model as it is implemented in \code{cilia.udf}: the beat kinematics, the drag law, the removal of each filament's own flow from the sampled velocity, the regularised spreading kernel, and the implicit coupling of panel forces and flow by interface quasi-Newton iterations.
 It closes with the benchmark case and the default parameters.
 \end{abstract}
 
@@ -191,7 +191,7 @@ The correction in \eqref{eq:kernel} cancels that term, so beyond a few $\eps$ th
 The kernel is truncated at $r_\mathrm{cut} = 3.8\,\eps$, beyond which it carries $3\times10^{-5}$ of the force (Fig.~\ref{fig:kernels}).
 
 In this model $\eps$ is a numerical width, not the cilium radius: the radius is already in $C_\parallel$ and $C_\perp$, and once the self-flow is removed the answer converges as $\eps\to0$ at fixed $\eps/\Delta x$ and $\eps/(L/N_p)$.
-The default $\eps = 0.1$ with $N_p = 20$ is resolved on the benchmark mesh.
+The default $\eps = 0.1$ with $N_p = 40$ is resolved on the benchmark mesh: against $N_p = 80$, the mean wall shear differs by 0.38\,\% (1.9\,\% at $N_p = 20$), at about second order in $N_p$.
 
 \begin{figure}[t]
   \centering
@@ -285,7 +285,7 @@ Table~\ref{tab:params} lists the defaults, all set in the \code{[CASEDATA]} sect
     Quantity & Symbol & Value & \code{[CASEDATA]} key \\
     \midrule
     Reynolds number & $\mathrm{Re}$ & $10^{-3}$ & (\code{[FLUID VELOCITY] viscosity}) \\
-    Panels per cilium & $N_p$ & 20 & \code{numPanels} \\
+    Panels per cilium & $N_p$ & 40 & \code{numPanels} \\
     Slenderness & $L/r$ & 20 & \code{slenderness} \\
     Kernel & $\delta_\eps$ & zero second moment & \code{gaussianKernel = gauss2} \\
     Kernel width & $\eps$ & 0.1 & \code{gaussianWidth} \\

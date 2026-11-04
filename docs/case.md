@@ -17,6 +17,6 @@ The `small4` cell repeated k × k times (k = 2, 4, 8): box k × k × 1.5, 10k ×
 
 ## Reference run
 
-`cases/small4/m8_reference_gauss2.out` holds the `cilia`, `vals` and `wall` lines over t ∈ [1, 2] of `small4` at tighter settings than production: dt = 1e-4, coupling tolerance 1e-5, solver tolerances 1e-4. Production settings pass the gate against it with 8.7e-4 of peak on the worst quantity (∫∂v/∂z), so the margin is small: changes that are meant to keep the answer should be judged with it, and changes to dt or tolerances will show up.
+`cases/small4/reference.out` holds the `cilia`, `vals` and `wall` lines over t ∈ [1, 2] of `small4` at tighter settings than production: dt = 1e-4, coupling tolerance 1e-5, solver tolerances 1e-4. Production settings pass the gate against it with a cycle L2 of 1.56e-4 and a maximum of 1.01e-3 of peak on the worst quantity (∫∂v/∂z), so the L2 margin is small: changes that are meant to keep the answer should be judged with it, and changes to dt or tolerances will show up.
 
 ∫p over a plane depends on the pressure gauge (periodic x, y with a symmetry top), so treat it as a regression check, not as physics.

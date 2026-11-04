@@ -13,7 +13,7 @@
 // everything is non-dimensional with the cilium length L and beat period T = 1/f.
 
 // ---------------------------------------------------------------------------
-// Case parameters: read from [CASEDATA] in 3d.par (see readCaseData).
+// Case parameters: read from the [CASEDATA] section of the case's .par (see readCaseData).
 // Defaults are the production values.
 // ---------------------------------------------------------------------------
 std::string coordinatesFile = "coordinates.txt"; // one cilium per line: x_root y_root beta
@@ -21,42 +21,42 @@ int    N_p          = 20;         // panels per cilium
 dfloat slenderness  = 20.0;       // L/r, sets C_par = 2 pi/ln(L/r), C_perp = 2 C_par
 dfloat epsilon      = 0.1;        // Gaussian regularisation width
 dfloat rcutFactor   = 3.4;        // r_cut = rcutFactor * epsilon
-// M.8: spreading blob. gauss: exp(-r^2/eps^2)/(pi^1.5 eps^3); its flow is (1 + eps^2/4 lap) S F + exp. small, an
+// spreading blob. gauss: exp(-r^2/eps^2)/(pi^1.5 eps^3); its flow is (1 + eps^2/4 lap) S F + exp. small, an
 // O(eps^2/d^3) potential-dipole error in every interaction at distance d (wall image of the own cilium, neighbours),
-// which gives the first-order eps error of M.2/M.7. gauss2: (5/2 - r^2/eps^2) x gauss = (1 - eps^2/4 lap) gauss, zero
+// which gives a first-order error in eps. gauss2: (5/2 - r^2/eps^2) x gauss = (1 - eps^2/4 lap) gauss, zero
 // second moment: the flow is S F up to exponentially small terms beyond a few eps
 std::string gaussianKernel = "gauss";
 int kernel2 = 0;
 dfloat T_ramp       = 0.01;       // startup force ramp duration
 dfloat f_c          = 1.5915494;  // relaxation cut-off frequency, gamma = 2 pi f_c dt
-std::string relaxScheme = "cn";  // relaxation update: cn (Crank-Nicolson, second order; default since P1.2), euler (first order, pre-P1.2 runs) or none (f = f*, i.e. f_c = inf; M.4)
+std::string relaxScheme = "cn";  // relaxation update: cn (Crank-Nicolson, second order; default), euler (first order, older runs) or none (f = f*, i.e. f_c = inf)
 dfloat f_beat       = 1.0;        // beat frequency relative to the reference f
 dfloat L_c          = 1.0;        // cilium length relative to the reference L
 int    diagInterval = 1;          // steps between 'time ubar |V|max vals' lines
 dfloat wallPlaneZ   = 0.001;      // plane of the 'wall' line integrals, just above the wall
 int    profileCilia = 0;          // 1: time the udf parts (udfSource::*, udfExecuteStep::*), with device syncs
-// M.3 rod test: kinematics = rod replaces the beat by a straight rigid rod of length L_c centred at
+// rod test: kinematics = rod replaces the beat by a straight rigid rod of length L_c centred at
 // (x_root, y_root, rodCentreZ) along rodAxis, with virtual velocity 1 along rodVelocity (it does not move)
 std::string kinematics = "fb";    // fb (Fulford-Blake beat) or rod
 std::string rodAxis = "z";        // x, y or z
 std::string rodVelocity = "x";    // x, y or z
 dfloat rodCentreZ = 0.5;
-// M.3: 1 subtracts each cilium's own free-space regularised-Stokeslet velocity from u at its panels
+// 1 subtracts each cilium's own free-space regularised-Stokeslet velocity from u at its panels
 // (RFT's ln(L/r) already holds the filament's own flow; sampling u counts it twice, ~half the drag lost)
-// M.6: 2 subtracts the self-flow of the force being computed, f = C (V - u + S f), solved per cilium as
+// 2 subtracts the self-flow of the force being computed, f = C (V - u + S f), solved per cilium as
 // (I - C S) f = C (V - u): the same model to O(dt^k) (u holds the flow of the EXT force, f(t_n) + O(dt^k)),
 // but the subtraction is no longer an explicit positive-feedback loop (gain C S ~ 0.9, unstable with f = f*)
 int    subtractSelfFlow = 0;
-// M.5: panel length and tangent. uniform: l = L_c/N_p, tangent by finite differences of the panel centres (the
+// panel length and tangent. uniform: l = L_c/N_p, tangent by finite differences of the panel centres (the
 // Nek5000 model; FB is not inextensible, so this integrates the drag over the beat parameter s, not arclength:
 // ~8% off in net force). arclength: l_i = L_c |dxi/ds(s_i)| / N_p and the analytic tangent (midpoint rule of the
 // RFT line integral over the actual curve)
 std::string panelLength = "uniform";
-// M.6: >0 prints one 'panel' line per panel for the first dumpPanelSteps calls of userForcing (rank 0):
+// >0 prints one 'panel' line per panel for the first dumpPanelSteps calls of userForcing (rank 0):
 // call time k i, f*, applied force sum_h c_h f_h (next solve), raw u, subtracted self-flow, V_cilia
 int    dumpPanelSteps = 0;
-// M.6: coupling of the panel forces and the flow. explicit: one solve per step, the force from u^n enters the
-// solve through o_EXT (EXT-extrapolated; needs the relaxation filter, f = f* is unstable: M.6 session 1).
+// coupling of the panel forces and the flow. explicit: one solve per step, the force from u^n enters the
+// solve through o_EXT (EXT-extrapolated; needs the relaxation filter, f = f* is unstable).
 // iqn: outer correctors per step (nekRS userConvergenceCheck) with interface quasi-Newton (IQN-ILS, Degroote 2009,
 // as in preCICE): F^k at x(t_{n+1}) -> solve -> f* = C (V - u^k + S F^k) -> IQN update of F, until
 // |f* - F| <= couplingTol |f*|; the converged F is the implicit f = f* model (needs relaxScheme = none)
@@ -65,19 +65,20 @@ dfloat couplingTol = 1e-4;        // relative 2-norm residual |f* - F| / |f*| ov
 int    couplingMaxIter = 50;      // correctors per step; a step that hits it is counted and the last F is kept
 dfloat couplingOmega = 0.2;       // under-relaxation of the first update when there are no secant pairs yet
 int    couplingReuse = 8;         // IQN-ILS(q): keep the secant pairs of the last q steps
-int    couplingRestart = 0;       // P2.6: > 0: a step that reaches this many correctors drops the earlier steps'
+int    couplingRestart = 0;       // > 0: a step that reaches this many correctors drops the earlier steps'
                                   // pairs and goes on with its own, which are kept ('iqnrestart' line); 0 = off
 dfloat couplingFilter = 1e-3;     // QR filter: drop a secant column whose orthogonal part is < filter * its norm
 bool   couplingIQN = false;
 double tilePeriod = 0;           // P2: > 0 prints 'tileasym' lines: |F - F shifted by one tile| / |F| in x and y (tiled cases, tile = 1)
-int    iqnVerbose = 0;            // P1.14: 1 prints the residual of every corrector ('iqnres' lines: time, corrector, |f* - F|/|f*|)
-// P2.1: spatial binning of the force spreading. Panels are sorted into a uniform x-y-z grid of bins (width
+int    iqnVerbose = 0;            // 1 prints the residual of every corrector ('iqnres' lines: time, corrector, |f* - F|/|f*|)
+// spatial binning of the force spreading. Panels are sorted into a uniform x-y-z grid of bins (width
 // ~binWidth r_cut, periodic in x and y) once per panel position; each element visits only the bins within r_cut of
 // its bounding box. 0 = the brute-force loop over all panels (same result to round-off)
 int    ciliaBinning = 1;
 dfloat binWidth = 0.5;            // target bin width / r_cut (the bins tile the box exactly, so slightly wider)
 int    binningCheck = 0;          // > 0: the first binningCheck spreads also run brute force; 'bincheck' lines
-int    iqnCheck = 0;              // P2.2: > 0: the first iqnCheck correctors also run the host H and MGS update; 'iqncheck' lines
+int    iqnCheck = 0;              // > 0: the first iqnCheck correctors also run the host H and MGS update; 'iqncheck' lines
+int    kinematicsCheck = 0;       // > 0: the first kinematicsCheck steps (iqn) also run the host kinematics and bin sort; 'kincheck' lines
 int    forcingCalls = 0;
 
 // Derived at setup
@@ -93,12 +94,12 @@ int N_part = 0;                   // total panels, N_cilia * N_p
 std::vector<dfloat> xc, yc, beta_c;
 std::vector<dfloat> f_old;        // relaxed panel forces from the previous step
 std::vector<dfloat> fstar_old;    // unrelaxed panel forces f* from the previous step (cn only)
-// M.3 self-flow: nekRS extrapolates the udf source (o_EXT) with the EXT coefficients, so the u sampled now was
+// self-flow: nekRS extrapolates the udf source (o_EXT) with the EXT coefficients, so the u sampled now was
 // driven by sum_i c_i f_i, f_i = the forces of the last calls (i = 0 newest), spread at positions x_i
 std::vector<std::vector<dfloat>> f_hist, x_hist;   // empty until the first step
 std::vector<dfloat> c_hist;       // EXT coefficients of the step that produced u
 bool relaxCN = false;
-bool relaxNone = false;          // M.4: no relaxation, f = f*
+bool relaxNone = false;          // no relaxation, f = f*
 bool restoreForceHistory = false;
 const std::string forceHistoryFile = "cilia_force_history.bin";
 
@@ -123,8 +124,15 @@ dfloat dcoeff(const dfloat* C, int col, dfloat s) {
 }
 
 // OCCA Device Buffers
+// iqn path: o_xpc, o_V, o_TL, o_px.. and o_fl hold the LOCAL panels (own + halo cilia, localCilia order: the
+// kinematics, the bins and the spreading); o_xo, o_Vo, o_TLo, o_pxo.., o_upc and o_f hold the OWN panels (find / eval,
+// the panel force and the IQN iterate). Explicit coupling: one layout, all panels (o_xpc, o_f, o_px.., o_upc)
 occa::memory o_xpc, o_f;
+occa::memory o_V, o_TL;          // panel velocities and t, l on the device (computed there)
 occa::memory o_px, o_py, o_pz, o_upc;
+occa::memory o_fl;               // F of the local panels (own scattered in, halo received)
+int kinPanels = 0;              // local panels in the iqn layout (kinCilia x N_p)
+occa::memory o_xo, o_Vo, o_TLo, o_pxo, o_pyo, o_pzo;   // the own panels' kinematics
 pointInterpolation_t* interp = nullptr;
 
 // Profiling: tags print in the runtime statistics via addUserStat. The device is synced at each
@@ -157,6 +165,8 @@ void ptoc(const std::string &tag) {
                            @restrict const dfloat *z,
                            const int useJw,
                            @restrict const dfloat *Jw,
+                           const int fuse,
+                           const dfloat *FU0,
                            @restrict dfloat *FU) {
 
   for(dlong e=0; e<Nelements; ++e; @outer(0)){
@@ -186,27 +196,31 @@ void ptoc(const std::string &tag) {
 
         dfloat r2 = dx2 + dy2 + dz2;
         dfloat delta = exp(-r2 * epsinv2) * invnorm;
-        if (kernel2) delta *= 2.5 - r2 * epsinv2;   // M.8 gauss2
+        if (kernel2) delta *= 2.5 - r2 * epsinv2;   // gauss2
 
         fx += fpanel[i*3 + 0] * delta;
         fy += fpanel[i*3 + 1] * delta;
         fz += fpanel[i*3 + 2] * delta;
       }
 
-      // M.6 iqn: FU is o_JwF (the assembled rhs), which holds the mass matrix Jw times the force
+      // iqn: FU is o_JwF (the assembled rhs), which holds the mass matrix Jw times the force
       if (useJw) {
         const dfloat w = Jw[id];
         fx *= w; fy *= w; fz *= w;
       }
 
-      FU[id + 0 * fieldOffset] += fx;
-      FU[id + 1 * fieldOffset] += fy;
-      FU[id + 2 * fieldOffset] += fz;
+      // fuse: FU = FU0 + force (the corrector's o_JwF from the step's cilia-free o_JwF0, no copy first)
+      const dfloat b0 = fuse ? FU0[id + 0 * fieldOffset] : FU[id + 0 * fieldOffset];
+      const dfloat b1 = fuse ? FU0[id + 1 * fieldOffset] : FU[id + 1 * fieldOffset];
+      const dfloat b2 = fuse ? FU0[id + 2 * fieldOffset] : FU[id + 2 * fieldOffset];
+      FU[id + 0 * fieldOffset] = b0 + fx;
+      FU[id + 1 * fieldOffset] = b1 + fy;
+      FU[id + 2 * fieldOffset] = b2 + fz;
     }
   }
 }
 
-// P2.1: the same spreading, but element e visits only the panels in its bins. elemBins[e*6 + 0..5] = first x bin,
+// the same spreading, but element e visits only the panels in its bins. elemBins[e*6 + 0..5] = first x bin,
 // number of x bins (wrapping, < nbx or = nbx from 0), first y bin, number of y bins, first and last z bin.
 // Bin b = (iz nby + iy) nbx + ix holds the panels binPanel[binStart[b] .. binStart[b+1]); x bins of one (iy, iz)
 // row are contiguous, so a row is at most two panel ranges (two when the x range wraps)
@@ -230,6 +244,8 @@ void ptoc(const std::string &tag) {
                                  @restrict const dfloat *z,
                                  const int useJw,
                                  @restrict const dfloat *Jw,
+                                 const int fuse,
+                                 const dfloat *FU0,
                                  @restrict dfloat *FU) {
 
   for(dlong e=0; e<Nelements; ++e; @outer(0)){
@@ -287,15 +303,19 @@ void ptoc(const std::string &tag) {
         fx *= w; fy *= w; fz *= w;
       }
 
-      FU[id + 0 * fieldOffset] += fx;
-      FU[id + 1 * fieldOffset] += fy;
-      FU[id + 2 * fieldOffset] += fz;
+      // fuse: FU = FU0 + force (the corrector's o_JwF from the step's cilia-free o_JwF0, no copy first)
+      const dfloat b0 = fuse ? FU0[id + 0 * fieldOffset] : FU[id + 0 * fieldOffset];
+      const dfloat b1 = fuse ? FU0[id + 1 * fieldOffset] : FU[id + 1 * fieldOffset];
+      const dfloat b2 = fuse ? FU0[id + 2 * fieldOffset] : FU[id + 2 * fieldOffset];
+      FU[id + 0 * fieldOffset] = b0 + fx;
+      FU[id + 1 * fieldOffset] = b1 + fy;
+      FU[id + 2 * fieldOffset] = b2 + fz;
     }
   }
 }
 
 // ---------------------------------------------------------------------------
-// P2.2: the iqn corrector on the device. Per panel ii (one thread): u from eval (-999 in all three = lost), minus
+// the iqn corrector on the device. Per panel ii (one thread): u from eval (-999 in all three = lost), minus
 // the own cilium's free-space regularised-Stokeslet flow of F (subtractSelfFlow 1, same formula as regStokeslet),
 // then H = R mu l (C_par V_par + C_perp V_perp), V = V_cilia - u (0 when lost). H goes to pool[oH + 3 ii + c]
 // ---------------------------------------------------------------------------
@@ -464,7 +484,245 @@ void ptoc(const std::string &tag) {
   }
 }
 
-// P1.4: all diagnostics in one pass, one partial result per element (printDiagnostics sums them).
+// ---------------------------------------------------------------------------
+// panel kinematics on the device, the same formulas as panelKinematics, for nPanel = N_p x (the cilia in
+// root[]: x, y, beta per cilium). coef = A1[21] A2[21] B1[18] B2[18]. Uniform panels: the centred-difference
+// tangent recomputes the neighbours' positions in the same thread.
+// ---------------------------------------------------------------------------
+@kernel void ciliaKinematics(const int nPanel,
+                             const int N_p,
+                             const int N_o,
+                             const int rod,
+                             const int arclength,
+                             const dfloat tNow,
+                             const dfloat omega,
+                             const dfloat L_c,
+                             const dfloat l_panel,
+                             const int rodAx,
+                             const int rodVel,
+                             const dfloat rodZ,
+                             const dfloat xmin,
+                             const dfloat ymin,
+                             const dfloat Lx,
+                             const dfloat Ly,
+                             @restrict const dfloat *root,
+                             @restrict const dfloat *coef,
+                             @restrict dfloat *xpc,
+                             @restrict dfloat *Vc,
+                             @restrict dfloat *TL,
+                             @restrict dfloat *px,
+                             @restrict dfloat *py,
+                             @restrict dfloat *pz) {
+  for(int b=0; b<(nPanel + 63)/64; ++b; @outer(0)){
+    for(int t=0; t<64; ++t; @inner(0)){
+      const int m = b*64 + t;
+      if (m < nPanel) {
+        const int kk = m / N_p, i = m - kk*N_p;
+        const dfloat x0 = root[kk*3 + 0], y0 = root[kk*3 + 1], beta = root[kk*3 + 2];
+        dfloat X0 = 0.0, X1 = 0.0, X2 = 0.0;
+        if (rod) {
+          const dfloat s = (dfloat)(i + 0.5) / (dfloat)N_p;
+          X0 = x0 + (rodAx == 0 ? (s - 0.5) * L_c : 0.0);
+          X1 = y0 + (rodAx == 1 ? (s - 0.5) * L_c : 0.0);
+          X2 = rodZ + (rodAx == 2 ? (s - 0.5) * L_c : 0.0);
+          xpc[m*3 + 0] = X0; xpc[m*3 + 1] = X1; xpc[m*3 + 2] = X2;
+          Vc[m*3 + 0] = rodVel == 0 ? 1.0 : 0.0;
+          Vc[m*3 + 1] = rodVel == 1 ? 1.0 : 0.0;
+          Vc[m*3 + 2] = rodVel == 2 ? 1.0 : 0.0;
+          TL[m*4 + 0] = rodAx == 0 ? 1.0 : 0.0;
+          TL[m*4 + 1] = rodAx == 1 ? 1.0 : 0.0;
+          TL[m*4 + 2] = rodAx == 2 ? 1.0 : 0.0;
+          TL[m*4 + 3] = l_panel;
+        } else {
+          const dfloat cb = cos(beta), sb = sin(beta);
+          // o = 0, 1, 2: panels i-1, i, i+1 (the ends use themselves; arclength needs only i)
+          dfloat P0[3], P1[3], P2[3];
+          for(int o=0; o<3; ++o){
+            int ii = i + o - 1;
+            if (ii < 0) ii = 0;
+            if (ii > N_p - 1) ii = N_p - 1;
+            P0[o] = 0.0; P1[o] = 0.0; P2[o] = 0.0;
+            if (o != 1 && arclength) continue;
+            const dfloat s = (dfloat)(ii + 0.5) / (dfloat)N_p;
+            dfloat xi1 = 0.5 * (coef[0]*s + coef[1]*s*s + coef[2]*s*s*s);
+            dfloat xi2 = 0.5 * (coef[21]*s + coef[22]*s*s + coef[23]*s*s*s);
+            dfloat dxi1 = 0.0, dxi2 = 0.0;
+            dfloat sxi1 = 0.5 * (coef[0] + 2.0*coef[1]*s + 3.0*coef[2]*s*s);
+            dfloat sxi2 = 0.5 * (coef[21] + 2.0*coef[22]*s + 3.0*coef[23]*s*s);
+            for(int j=1; j<=N_o; ++j){
+              const dfloat wt = j * omega * tNow;
+              const dfloat cw = cos(wt), sw = sin(wt);
+              const int a = j*3, bb = (j - 1)*3;
+              const dfloat a1 = coef[a]*s + coef[a + 1]*s*s + coef[a + 2]*s*s*s;
+              const dfloat a2 = coef[21 + a]*s + coef[21 + a + 1]*s*s + coef[21 + a + 2]*s*s*s;
+              const dfloat b1 = coef[42 + bb]*s + coef[42 + bb + 1]*s*s + coef[42 + bb + 2]*s*s*s;
+              const dfloat b2 = coef[60 + bb]*s + coef[60 + bb + 1]*s*s + coef[60 + bb + 2]*s*s*s;
+              xi1 += a1*cw + b1*sw;
+              dxi1 -= (j*omega)*a1*sw - (j*omega)*b1*cw;
+              xi2 += a2*cw + b2*sw;
+              dxi2 -= (j*omega)*a2*sw - (j*omega)*b2*cw;
+              sxi1 += (coef[a] + 2.0*coef[a + 1]*s + 3.0*coef[a + 2]*s*s)*cw
+                    + (coef[42 + bb] + 2.0*coef[42 + bb + 1]*s + 3.0*coef[42 + bb + 2]*s*s)*sw;
+              sxi2 += (coef[21 + a] + 2.0*coef[21 + a + 1]*s + 3.0*coef[21 + a + 2]*s*s)*cw
+                    + (coef[60 + bb] + 2.0*coef[60 + bb + 1]*s + 3.0*coef[60 + bb + 2]*s*s)*sw;
+            }
+            P0[o] = L_c * xi1 * cb + x0;
+            P1[o] = L_c * xi1 * sb + y0;
+            P2[o] = L_c * xi2;
+            if (o == 1) {
+              Vc[m*3 + 0] = L_c * dxi1 * cb;
+              Vc[m*3 + 1] = L_c * dxi1 * sb;
+              Vc[m*3 + 2] = L_c * dxi2;
+              if (arclength) {
+                const dfloat sn = sqrt(sxi1 * sxi1 + sxi2 * sxi2);
+                TL[m*4 + 0] = sxi1 * cb / sn;
+                TL[m*4 + 1] = sxi1 * sb / sn;
+                TL[m*4 + 2] = sxi2 / sn;
+                TL[m*4 + 3] = L_c * sn / N_p;
+              }
+            }
+          }
+          X0 = P0[1]; X1 = P1[1]; X2 = P2[1];
+          xpc[m*3 + 0] = X0; xpc[m*3 + 1] = X1; xpc[m*3 + 2] = X2;
+          if (!arclength) {
+            const dfloat t0 = P0[2] - P0[0], t1 = P1[2] - P1[0], t2 = P2[2] - P2[0];
+            const dfloat tn = sqrt(t0*t0 + t1*t1 + t2*t2);
+            TL[m*4 + 0] = tn > 1.0e-14 ? t0 / tn : 0.0;
+            TL[m*4 + 1] = tn > 1.0e-14 ? t1 / tn : 0.0;
+            TL[m*4 + 2] = tn > 1.0e-14 ? t2 / tn : 0.0;
+            TL[m*4 + 3] = l_panel;
+          }
+        }
+        px[m] = X0 - Lx * floor((X0 - xmin) / Lx);
+        py[m] = X1 - Ly * floor((X1 - ymin) / Ly);
+        pz[m] = X2;
+      }
+    }
+  }
+}
+
+// stable binning on the device, no atomics. One thread per x-y bin column c owns the nbz bins
+// iz nCol + c. It walks the static candidate list of the column (colCilia[colStart[c] .. colStart[c+1]): every
+// cilium whose beat footprint touches c, ascending) panel by panel, so each bin's panels come out in index order:
+// the host counting sort's order. Pass 0 counts into cnt, ciliaBinScan turns the counts into start, pass 1 places.
+@kernel void ciliaBinColumns(const int pass,
+                             const int nCol,
+                             const int nbx,
+                             const int nby,
+                             const int nbz,
+                             const int N_p,
+                             const dfloat xmin,
+                             const dfloat ymin,
+                             const dfloat zlo,
+                             const dfloat hbx,
+                             const dfloat hby,
+                             const dfloat hbz,
+                             @restrict const int *colStart,
+                             @restrict const int *colCilia,
+                             @restrict const dfloat *px,
+                             @restrict const dfloat *py,
+                             @restrict const dfloat *pz,
+                             @restrict const int *start,
+                             @restrict int *cnt,
+                             @restrict int *binPanel) {
+  for(int b=0; b<(nCol + 63)/64; ++b; @outer(0)){
+    for(int t=0; t<64; ++t; @inner(0)){
+      const int c = b*64 + t;
+      if (c < nCol) {
+        for(int iz=0; iz<nbz; ++iz) cnt[iz*nCol + c] = (pass == 0) ? 0 : start[iz*nCol + c];
+        for(int j=colStart[c]; j<colStart[c + 1]; ++j){
+          const int m0 = colCilia[j] * N_p;
+          for(int i=0; i<N_p; ++i){
+            const int m = m0 + i;
+            int ix = (int)floor((px[m] - xmin) / hbx);
+            int iy = (int)floor((py[m] - ymin) / hby);
+            ix = ix < 0 ? 0 : (ix > nbx - 1 ? nbx - 1 : ix);
+            iy = iy < 0 ? 0 : (iy > nby - 1 ? nby - 1 : iy);
+            if (iy*nbx + ix != c) continue;
+            int iz = (int)floor((pz[m] - zlo) / hbz);
+            iz = iz < 0 ? 0 : (iz > nbz - 1 ? nbz - 1 : iz);
+            const int bin = iz*nCol + c;
+            if (pass == 0) cnt[bin] += 1;
+            else { binPanel[cnt[bin]] = m; cnt[bin] += 1; }
+          }
+        }
+      }
+    }
+  }
+}
+
+// Exclusive scan of cnt[0 .. nb) into start[0 .. nb], one block of 256 threads (each a contiguous range).
+// Every panel lies in its cilium's footprint, so start[nb] = nPanel; lost[0] accumulates any shortfall
+@kernel void ciliaBinScan(const int nb,
+                          const int nPanel,
+                          @restrict const int *cnt,
+                          @restrict int *start,
+                          @restrict int *lost) {
+  for(int o=0; o<1; ++o; @outer(0)){
+    @shared int s[256];
+    for(int t=0; t<256; ++t; @inner(0)){
+      const int len = (nb + 255) / 256;
+      const int b0 = t * len;
+      const int b1 = (b0 + len < nb) ? b0 + len : nb;
+      int acc = 0;
+      for(int bb=b0; bb<b1; ++bb) acc += cnt[bb];
+      s[t] = acc;
+    }
+    @barrier();
+    for(int t=0; t<256; ++t; @inner(0)){
+      if (t == 0) {
+        int acc = 0;
+        for(int j=0; j<256; ++j){ const int v = s[j]; s[j] = acc; acc += v; }
+        start[nb] = acc;
+        lost[0] += nPanel - acc;
+      }
+    }
+    @barrier();
+    for(int t=0; t<256; ++t; @inner(0)){
+      const int len = (nb + 255) / 256;
+      const int b0 = t * len;
+      const int b1 = (b0 + len < nb) ? b0 + len : nb;
+      int acc = s[t];
+      for(int bb=b0; bb<b1; ++bb){ start[bb] = acc; acc += cnt[bb]; }
+    }
+  }
+}
+
+// copy whole blocks (w dfloats: the entries of one cilium) between layouts. Gather: dst block i = src block
+// idx[i]; scatter: dst block idx[i] = src block i. Own <-> local cilia, and the halo send / receive buffers
+@kernel void ciliaGatherBlocks(const int nBlk,
+                               const int w,
+                               @restrict const int *idx,
+                               @restrict const dfloat *src,
+                               @restrict dfloat *dst) {
+  for(int b=0; b<(nBlk*w + 255)/256; ++b; @outer(0)){
+    for(int t=0; t<256; ++t; @inner(0)){
+      const int m = b*256 + t;
+      if (m < nBlk*w) {
+        const int i = m / w;
+        dst[m] = src[(dlong)idx[i]*w + (m - i*w)];
+      }
+    }
+  }
+}
+
+@kernel void ciliaScatterBlocks(const int nBlk,
+                                const int w,
+                                @restrict const int *idx,
+                                @restrict const dfloat *src,
+                                @restrict dfloat *dst) {
+  for(int b=0; b<(nBlk*w + 255)/256; ++b; @outer(0)){
+    for(int t=0; t<256; ++t; @inner(0)){
+      const int m = b*256 + t;
+      if (m < nBlk*w) {
+        const int i = m / w;
+        dst[(dlong)idx[i]*w + (m - i*w)] = src[m];
+      }
+    }
+  }
+}
+
+// all diagnostics in one pass, one partial result per element (printDiagnostics sums them).
 // out[e*10 + q]: q = 0 int u dV, 1..8 the 'wall' integrals (printDiagnostics order), 9 max |V|.
 @kernel void diagReduce(const dlong Nelements,
                         const dlong fieldOffset,
@@ -566,6 +824,7 @@ void readCaseData() {
   platform->par->extract("casedata", "binwidth", binWidth);
   platform->par->extract("casedata", "binningcheck", binningCheck);
   platform->par->extract("casedata", "iqncheck", iqnCheck);
+  platform->par->extract("casedata", "kinematicscheck", kinematicsCheck);
   nekrsCheck(binWidth <= 0, platform->comm.mpiComm(), EXIT_FAILURE, "binWidth = %g; must be > 0\n", binWidth);
   couplingIQN = (couplingScheme == "iqn");
   nekrsCheck(!couplingIQN && couplingScheme != "explicit", platform->comm.mpiComm(), EXIT_FAILURE,
@@ -632,8 +891,8 @@ void readForceHistory(double time) {
 
 // Gaussian-regularised Stokeslet for the blob exp(-r^2/eps^2)/(pi^1.5 eps^3): u = (a F + b (F.rhat) rhat)/mu,
 // G = erf(r/eps)/(4 pi r), B'(r) = [(r^2/2 - eps^2/4) erf(r/eps) + eps r e^{-r^2/eps^2}/(2 sqrt pi)]/(4 pi r^2),
-// a = G - B'/r, b = 3 B'/r - G (model_checks/stokeslet_closed_form.py checks it against the Fourier integral).
-// M.8 gauss2 = (1 - eps^2/4 lap) gauss: G2 = G + (eps^2/4) phi, B2' = B' - (eps^2/4) G'
+// a = G - B'/r, b = 3 B'/r - G (studies/stokeslet_closed_form.py checks it against the Fourier integral).
+// gauss2 = (1 - eps^2/4 lap) gauss: G2 = G + (eps^2/4) phi, B2' = B' - (eps^2/4) G'
 void regStokeslet(dfloat r, dfloat &a, dfloat &b) {
   const dfloat pi = 4.0 * atan(1.0);
   if (r < 1e-3 * epsilon) { a = (kernel2 ? 1.5 : 1.0) / (3.0 * pow(pi, 1.5) * epsilon); b = 0.0; return; }
@@ -649,7 +908,7 @@ void regStokeslet(dfloat r, dfloat &a, dfloat &b) {
   b = 3.0 * Bp / r - G;
 }
 
-// M.6 subtractSelfFlow = 2: per cilium, solve (I - C S) f = C (V - u) with C the 3x3 RFT resistance of each panel
+// subtractSelfFlow = 2: per cilium, solve (I - C S) f = C (V - u) with C the 3x3 RFT resistance of each panel
 // (R mu l (C_par t t + C_perp (I - t t))) and S the free-space regularised Stokeslet among the cilium's own panels
 // at the current positions; lost panels (u = -999) get f = 0
 std::vector<dfloat> implicitSelfFlowForce(const std::vector<dfloat> &x_pc, const std::vector<dfloat> &V_cilia,
@@ -717,8 +976,8 @@ std::vector<dfloat> implicitSelfFlowForce(const std::vector<dfloat> &x_pc, const
   return fs;
 }
 
-// Panel positions x_pc and prescribed velocities V_cilia at this time (Fulford-Blake beat or the M.3 rod),
-// the unit tangent and length per panel tl_pc (tx, ty, tz, l; M.5 panelLength),
+// Panel positions x_pc and prescribed velocities V_cilia at this time (Fulford-Blake beat or the rod test),
+// the unit tangent and length per panel tl_pc (tx, ty, tz, l; panelLength),
 // and px, py, pz: the positions wrapped into the periodic box for the point search
 void panelKinematics(double time, std::vector<dfloat> &x_pc, std::vector<dfloat> &V_cilia, std::vector<dfloat> &tl_pc,
                      std::vector<dfloat> &px, std::vector<dfloat> &py, std::vector<dfloat> &pz) {
@@ -814,16 +1073,17 @@ void panelKinematics(double time, std::vector<dfloat> &x_pc, std::vector<dfloat>
 }
 
 // ---------------------------------------------------------------------------
-// P2.1 binning. Uniform bins over the box: nbx x nby periodic, nbz from the mesh z range (panels outside it go
+// Binning. Uniform bins over the box: nbx x nby periodic, nbz from the mesh z range (panels outside it go
 // into the end bins, which every element whose range reaches past that end also visits). Per element (static
-// mesh) the bins within r_cut of its bounding box; per panel position a stable counting sort (host, while the
-// kinematics are on the host: P2.2 moves both to the device), so each bin's panels stay in index order.
+// mesh) the bins within r_cut of its bounding box; per panel position a stable counting sort, so each bin's panels
+// stay in index order: on the device for iqn (deviceKinematics), on the host for explicit coupling.
 // ---------------------------------------------------------------------------
 int nbx = 1, nby = 1, nbz = 1;
 dfloat hbx, hby, hbz, zlo;
 std::vector<int> binStart, binPanel;
+std::vector<int> elemBinsHost;   // the per-element bin ranges, also on the host (setupOwnership)
 occa::memory o_elemBins, o_binStart, o_binPanel;
-occa::memory o_chkA, o_chkB;   // binningCheck spare fields
+occa::memory o_chkA, o_chkB, o_chkC;   // binningCheck spare fields
 int binChecks = 0;
 
 void setupBins() {
@@ -869,6 +1129,7 @@ void setupBins() {
     o_elemBins = platform->device.malloc<int>(eb.size());
     o_elemBins.copyFrom(eb.data());
   }
+  elemBinsHost = eb;
   binStart.assign(nbx * nby * nbz + 1, 0);
   binPanel.assign(N_part, 0);
   o_binStart = platform->device.malloc<int>(binStart.size());
@@ -883,43 +1144,242 @@ void setupBins() {
            nel > 0 ? (double)visited / nel : 0.0, binningCheck);
 }
 
-// Stable counting sort of the (wrapped) panel positions into the bins
-void binPanels(const std::vector<dfloat> &px, const std::vector<dfloat> &py, const std::vector<dfloat> &pz) {
-  if (!ciliaBinning && !binningCheck) return;
-  ptic("udfSource::binPanels");
-  std::vector<int> bin(N_part);
-  std::fill(binStart.begin(), binStart.end(), 0);
-  for (int m = 0; m < N_part; m++) {
+// ---------------------------------------------------------------------------
+// Ownership. The owner of a cilium is the rank whose elements hold its root (find() on the roots at setup).
+// A rank's local cilia are every cilium whose panel centres can come within r_cut of one of its elements: the
+// footprint of the panel centres over a beat (the beat-frame range sampled at setup, plus a margin from the
+// sampled speed) touches an x-y bin column that one of its elements visits (the elemBins ranges already hold
+// r_cut). Roots don't move, so the sets are static. localCilia is sorted by global id, so a stable bin sort of the
+// local panels keeps the 1-rank summation order. Halo F exchange: the owner sends cilium k to every rank that
+// holds k as halo (sendLocal / recvLocal: positions in localCilia, per neighbour rank).
+// ---------------------------------------------------------------------------
+int nRanks = 1, myRank = 0;
+std::vector<int> ciliumOwner;                        // N_cilia
+std::vector<int> localCilia;                         // global ids, ascending: own + halo
+std::vector<int> ownLocal;                           // positions in localCilia of the own cilia
+std::vector<int> nbrRank;                            // ranks this one exchanges halo F with
+std::vector<std::vector<int>> sendLocal, recvLocal;  // per nbrRank entry: own cilia to send, halo cilia to fill
+dfloat beatLo = 0, beatHi = 0, beatMargin = 0;       // panel-centre range along the beat direction (/ L_c), margin
+
+// Range of the panel centres' xi1 (along the beat) over one cycle, from nSample phases; the margin is the largest
+// sampled panel speed times the sample spacing (a point moves at most that far between two samples)
+void beatReach() {
+  if (kinematics == "rod") { beatLo = beatHi = 0; beatMargin = 0.5 * L_c * (1.0 + 1e-6); return; }
+  const dfloat pi = 4.0 * atan(1.0);
+  const dfloat omega = 2.0 * pi * f_beat;
+  const int nSample = 4000;
+  beatLo = 0; beatHi = 0;   // the root itself, so the owner (root element) always holds its cilium
+  dfloat vmax = 0;
+  for (int q = 0; q < nSample; q++) {
+    const dfloat t = q / (nSample * f_beat);
+    for (int i = 0; i < N_p; i++) {
+      const dfloat s = (i + 0.5) / N_p;
+      dfloat xi1 = 0.5 * coeff(A1, 1, s), dxi1 = 0, dxi2 = 0;
+      for (int j = 1; j <= N_o; j++) {
+        const dfloat wt = j * omega * t;
+        xi1 += coeff(A1, j+1, s)*cos(wt) + coeff(B1, j, s)*sin(wt);
+        dxi1 -= (j*omega)*coeff(A1, j+1, s)*sin(wt) - (j*omega)*coeff(B1, j, s)*cos(wt);
+        dxi2 -= (j*omega)*coeff(A2, j+1, s)*sin(wt) - (j*omega)*coeff(B2, j, s)*cos(wt);
+      }
+      beatLo = std::min(beatLo, xi1);
+      beatHi = std::max(beatHi, xi1);
+      vmax = std::max(vmax, (dfloat)sqrt(dxi1 * dxi1 + dxi2 * dxi2));
+    }
+  }
+  beatMargin = 2.0 * L_c * vmax / (nSample * f_beat) + 1e-9;
+}
+
+// Bin columns [first, first + count) (mod nb) covering [lo, hi]; count = nb when it wraps all the way
+void columnRange(dfloat lo, dfloat hi, dfloat o, dfloat hb, int nb, int &first, int &count) {
+  const int a = (int)std::floor((lo - o) / hb), b = (int)std::floor((hi - o) / hb);
+  count = b - a + 1;
+  if (count >= nb) { first = 0; count = nb; }
+  else first = ((a % nb) + nb) % nb;
+}
+
+// Bin columns [fx, fx + cx) x [fy, fy + cy) (mod nbx, nby) that cilium k's panel centres can reach over a beat:
+// the segment root + L_c [beatLo, beatHi] (cos beta, sin beta) grown by the margin (rod: a square of half-width
+// L_c/2 about the root)
+void ciliumColumns(int k, int &fx, int &cx, int &fy, int &cy) {
+  const dfloat cb = cos(beta_c[k]), sb = sin(beta_c[k]);
+  const dfloat xa = xc[k] + L_c * beatLo * cb, xb = xc[k] + L_c * beatHi * cb;
+  const dfloat ya = yc[k] + L_c * beatLo * sb, yb = yc[k] + L_c * beatHi * sb;
+  columnRange(std::min(xa, xb) - beatMargin, std::max(xa, xb) + beatMargin, xmin, hbx, nbx, fx, cx);
+  columnRange(std::min(ya, yb) - beatMargin, std::max(ya, yb) + beatMargin, ymin, hby, nby, fy, cy);
+}
+
+void setupOwnership() {
+  auto comm = platform->comm.mpiComm();
+  MPI_Comm_size(comm, &nRanks);
+  MPI_Comm_rank(comm, &myRank);
+  beatReach();
+
+  // Owner: find() on the roots, round-robin over the ranks (one dummy point on a rank with none)
+  std::vector<dfloat> rx, ry, rz;
+  std::vector<int> ids;
+  for (int k = myRank; k < N_cilia; k += nRanks) {
+    ids.push_back(k);
+    rx.push_back(xc[k] - Lx * std::floor((xc[k] - xmin) / Lx));
+    ry.push_back(yc[k] - Ly * std::floor((yc[k] - ymin) / Ly));
+    rz.push_back(0.0);
+  }
+  if (ids.empty()) { rx.push_back(xmin); ry.push_back(ymin); rz.push_back(0.0); }
+  interp->setPoints(rx, ry, rz);
+  interp->find();
+  ciliumOwner.assign(N_cilia, -1);
+  for (size_t j = 0; j < ids.size(); j++)
+    if (interp->data().code[j] != 2) ciliumOwner[ids[j]] = interp->data().proc[j];   // 2: not found
+  MPI_Allreduce(MPI_IN_PLACE, ciliumOwner.data(), N_cilia, MPI_INT, MPI_MAX, comm);
+  int lost = 0;
+  for (int k = 0; k < N_cilia; k++) lost += ciliumOwner[k] < 0;
+  nekrsCheck(lost > 0, comm, EXIT_FAILURE, "%d cilium roots not found in the mesh\n", lost);
+
+  // Columns visited by this rank's elements
+  std::vector<char> col((size_t)nbx * nby, 0);
+  for (size_t e = 0; e * 6 < elemBinsHost.size(); e++) {
+    const int *b = &elemBinsHost[e * 6];
+    for (int jy = 0; jy < b[3]; jy++)
+      for (int jx = 0; jx < b[1]; jx++)
+        col[(size_t)((b[2] + jy) % nby) * nbx + (b[0] + jx) % nbx] = 1;
+  }
+
+  // Local cilia: the footprint columns (ciliumColumns) meet a column this rank visits
+  localCilia.clear();
+  ownLocal.clear();
+  for (int k = 0; k < N_cilia; k++) {
+    bool local = (ciliumOwner[k] == myRank);
+    if (!local) {
+      int fx, cx, fy, cy;
+      ciliumColumns(k, fx, cx, fy, cy);
+      for (int jy = 0; jy < cy && !local; jy++)
+        for (int jx = 0; jx < cx && !local; jx++)
+          local = col[(size_t)((fy + jy) % nby) * nbx + (fx + jx) % nbx];
+    }
+    if (local) {
+      if (ciliumOwner[k] == myRank) ownLocal.push_back(localCilia.size());
+      localCilia.push_back(k);
+    }
+  }
+
+  // Exchange lists: tell each owner which of its cilia this rank holds as halo
+  std::vector<std::vector<int>> want(nRanks);
+  std::vector<std::vector<int>> wantPos(nRanks);
+  for (size_t m = 0; m < localCilia.size(); m++) {
+    const int o = ciliumOwner[localCilia[m]];
+    if (o != myRank) { want[o].push_back(localCilia[m]); wantPos[o].push_back(m); }
+  }
+  std::vector<int> nWant(nRanks), nGive(nRanks), dW(nRanks + 1, 0), dG(nRanks + 1, 0);
+  for (int r = 0; r < nRanks; r++) nWant[r] = want[r].size();
+  MPI_Alltoall(nWant.data(), 1, MPI_INT, nGive.data(), 1, MPI_INT, comm);
+  for (int r = 0; r < nRanks; r++) { dW[r + 1] = dW[r] + nWant[r]; dG[r + 1] = dG[r] + nGive[r]; }
+  std::vector<int> wantFlat(dW[nRanks]), giveFlat(dG[nRanks]);
+  for (int r = 0; r < nRanks; r++) std::copy(want[r].begin(), want[r].end(), wantFlat.begin() + dW[r]);
+  MPI_Alltoallv(wantFlat.data(), nWant.data(), dW.data(), MPI_INT, giveFlat.data(), nGive.data(), dG.data(), MPI_INT, comm);
+  nbrRank.clear(); sendLocal.clear(); recvLocal.clear();
+  for (int r = 0; r < nRanks; r++) {
+    if (nWant[r] == 0 && nGive[r] == 0) continue;
+    nbrRank.push_back(r);
+    recvLocal.push_back(wantPos[r]);
+    std::vector<int> snd;
+    for (int j = dG[r]; j < dG[r + 1]; j++) {
+      const int pos = std::lower_bound(localCilia.begin(), localCilia.end(), giveFlat[j]) - localCilia.begin();
+      nekrsCheck(pos == (int)localCilia.size() || localCilia[pos] != giveFlat[j] || ciliumOwner[giveFlat[j]] != myRank,
+                 MPI_COMM_SELF, EXIT_FAILURE, "rank %d asked for cilium %d it does not own\n", r, giveFlat[j]);
+      snd.push_back(pos);
+    }
+    sendLocal.push_back(snd);
+  }
+
+  // Report: own, halo and local panels per rank (min / max over ranks), and the exchange volume
+  long st[4] = {(long)ownLocal.size(), (long)(localCilia.size() - ownLocal.size()), (long)localCilia.size() * N_p,
+                (long)nbrRank.size()};
+  long mn[4], mx[4], sum[4];
+  MPI_Allreduce(st, mn, 4, MPI_LONG, MPI_MIN, comm);
+  MPI_Allreduce(st, mx, 4, MPI_LONG, MPI_MAX, comm);
+  MPI_Allreduce(st, sum, 4, MPI_LONG, MPI_SUM, comm);
+  nekrsCheck(sum[0] != N_cilia, comm, EXIT_FAILURE, "owned cilia sum to %ld, not %d\n", sum[0], N_cilia);
+  if (myRank == 0)
+    printf("cilia: ownership: %d ranks, beat reach [%.4f, %.4f] L_c + %.2e; own %ld-%ld, halo %ld-%ld, local panels"
+           " %ld-%ld (of %d), neighbours %ld-%ld per rank\n", nRanks, beatLo, beatHi, beatMargin, mn[0], mx[0], mn[1],
+           mx[1], mn[2], mx[2], N_part, mn[3], mx[3]);
+}
+
+// Halo exchange of a per-panel host vector in the local layout (nc entries per panel): the own cilia's entries go
+// to the ranks that hold them as halo. Host-staged.
+void haloExchange(std::vector<dfloat> &v, int nc) {
+  auto comm = platform->comm.mpiComm();
+  const int w = N_p * nc;   // entries per cilium
+  std::vector<std::vector<dfloat>> sbuf(nbrRank.size()), rbuf(nbrRank.size());
+  std::vector<MPI_Request> req;
+  for (size_t j = 0; j < nbrRank.size(); j++) {
+    rbuf[j].resize(recvLocal[j].size() * w);
+    if (!rbuf[j].empty()) {
+      req.emplace_back();
+      MPI_Irecv(rbuf[j].data(), rbuf[j].size(), MPI_DFLOAT, nbrRank[j], 31, comm, &req.back());
+    }
+  }
+  for (size_t j = 0; j < nbrRank.size(); j++) {
+    for (int pos : sendLocal[j]) sbuf[j].insert(sbuf[j].end(), v.begin() + (size_t)pos * w, v.begin() + (size_t)(pos + 1) * w);
+    if (!sbuf[j].empty()) {
+      req.emplace_back();
+      MPI_Isend(sbuf[j].data(), sbuf[j].size(), MPI_DFLOAT, nbrRank[j], 31, comm, &req.back());
+    }
+  }
+  MPI_Waitall(req.size(), req.data(), MPI_STATUSES_IGNORE);
+  for (size_t j = 0; j < nbrRank.size(); j++)
+    for (size_t m = 0; m < recvLocal[j].size(); m++)
+      std::copy(rbuf[j].begin() + m * w, rbuf[j].begin() + (m + 1) * w, v.begin() + (size_t)recvLocal[j][m] * w);
+}
+
+// Stable counting sort of the (wrapped) panel positions into the bins (host: explicit coupling, kinematicsCheck)
+void hostBinSort(const std::vector<dfloat> &px, const std::vector<dfloat> &py, const std::vector<dfloat> &pz,
+                 std::vector<int> &start, std::vector<int> &panel) {
+  const int n = px.size();
+  std::vector<int> bin(n);
+  start.assign((size_t)nbx * nby * nbz + 1, 0);
+  panel.assign(n, 0);
+  for (int m = 0; m < n; m++) {
     const int ix = std::clamp((int)std::floor((px[m] - xmin) / hbx), 0, nbx - 1);
     const int iy = std::clamp((int)std::floor((py[m] - ymin) / hby), 0, nby - 1);
     const int iz = std::clamp((int)std::floor((pz[m] - zlo) / hbz), 0, nbz - 1);
     bin[m] = (iz * nby + iy) * nbx + ix;
-    binStart[bin[m] + 1]++;
+    start[bin[m] + 1]++;
   }
-  for (size_t b = 1; b < binStart.size(); b++) binStart[b] += binStart[b - 1];
-  std::vector<int> next(binStart.begin(), binStart.end() - 1);
-  for (int m = 0; m < N_part; m++) binPanel[next[bin[m]]++] = m;
+  for (size_t b = 1; b < start.size(); b++) start[b] += start[b - 1];
+  std::vector<int> next(start.begin(), start.end() - 1);
+  for (int m = 0; m < n; m++) panel[next[bin[m]]++] = m;
+}
+
+void binPanels(const std::vector<dfloat> &px, const std::vector<dfloat> &py, const std::vector<dfloat> &pz) {
+  if (!ciliaBinning && !binningCheck) return;
+  ptic("udfSource::binPanels");
+  hostBinSort(px, py, pz, binStart, binPanel);
   o_binStart.copyFrom(binStart.data());
   o_binPanel.copyFrom(binPanel.data());
   ptoc("udfSource::binPanels");
 }
 
-void launchSpread(bool binned, int useJw, occa::memory &o_FU) {
+// o_FU0 (iqn): write o_FU = o_FU0 + spread instead of o_FU += spread. The panels are the local ones in iqn
+// (o_xpc, o_fl: own + halo cilia) and all of them otherwise (o_xpc, o_f)
+void launchSpread(bool binned, int useJw, occa::memory &o_FU, occa::memory *o_FU0 = nullptr) {
   auto mesh = nrs->meshV;
+  if (mesh->Nelements == 0) return;
+  occa::memory &o_F = couplingIQN ? o_fl : o_f;
+  const int nSpread = couplingIQN ? kinPanels : N_part;
   if (binned) {
-    if (mesh->Nelements == 0) return;
     addCiliaForceBinned(mesh->Nelements, nrs->fluid->fieldOffset, nbx, nby, o_elemBins, o_binStart, o_binPanel,
-                        o_xpc, o_f, epsinv2, rcut2, invnorm, kernel2, Lx, Ly, mesh->o_x, mesh->o_y, mesh->o_z,
-                        useJw, mesh->o_Jw, o_FU);
+                        o_xpc, o_F, epsinv2, rcut2, invnorm, kernel2, Lx, Ly, mesh->o_x, mesh->o_y, mesh->o_z,
+                        useJw, mesh->o_Jw, o_FU0 ? 1 : 0, o_FU0 ? *o_FU0 : o_FU, o_FU);
   } else {
-    addCiliaForce(mesh->Nelements, nrs->fluid->fieldOffset, N_part, o_xpc, o_f, epsinv2, rcut2, invnorm, kernel2,
-                  Lx, Ly, mesh->o_x, mesh->o_y, mesh->o_z, useJw, mesh->o_Jw, o_FU);
+    addCiliaForce(mesh->Nelements, nrs->fluid->fieldOffset, nSpread, o_xpc, o_F, epsinv2, rcut2, invnorm, kernel2,
+                  Lx, Ly, mesh->o_x, mesh->o_y, mesh->o_z, useJw, mesh->o_Jw, o_FU0 ? 1 : 0,
+                  o_FU0 ? *o_FU0 : o_FU, o_FU);
   }
 }
 
-// Spread the panel forces o_f at o_xpc onto the mesh and add them to o_FU (times Jw if useJw).
-// binningCheck: the first calls also compare binned and brute force on zeroed spare fields
-void spreadForces(int useJw, occa::memory &o_FU) {
+// Spread the panel forces onto the mesh and add them to o_FU (times Jw if useJw); with o_FU0, o_FU = o_FU0 + spread.
+// binningCheck: the first calls also compare binned and brute force on zeroed spare fields (and fused vs add)
+void spreadForces(int useJw, occa::memory &o_FU, occa::memory *o_FU0 = nullptr) {
   if (binChecks < binningCheck) {
     binChecks++;
     const dlong n3 = 3 * nrs->fluid->fieldOffset;
@@ -931,11 +1391,17 @@ void spreadForces(int useJw, occa::memory &o_FU) {
     const dlong N = nrs->meshV->Nlocal, off = nrs->fluid->fieldOffset;
     const dfloat err = platform->linAlg->maxAbsoluteError(N, 3, off, -1.0, o_chkA, o_chkB, platform->comm.mpiComm());
     const dfloat ref = platform->linAlg->amaxMany(N, 3, off, o_chkB, platform->comm.mpiComm());
+    // fused: o_FU0 + spread (o_FU0 = the brute-force spread, any nonzero field) must equal o_FU0 + spread added in place
+    if (!o_chkC.isInitialized()) o_chkC = platform->device.malloc<dfloat>(n3);
+    platform->linAlg->fill(n3, 0.0, o_chkC);
+    launchSpread(true, useJw, o_chkC, &o_chkB);
+    launchSpread(true, useJw, o_chkB);   // o_chkB += spread (binned; o_chkB held the brute-force spread)
+    const dfloat errF = platform->linAlg->maxAbsoluteError(N, 3, off, -1.0, o_chkC, o_chkB, platform->comm.mpiComm());
     if (platform->comm.mpiRank() == 0)
-      printf("%d %.3e %.3e %.3e  bincheck\n", binChecks, err, ref, ref > 0 ? err / ref : 0.0);
+      printf("%d %.3e %.3e %.3e %.3e  bincheck\n", binChecks, err, ref, ref > 0 ? err / ref : 0.0, errF);
   }
   ptic("udfSource::addCiliaForce");
-  launchSpread(ciliaBinning, useJw, o_FU);
+  launchSpread(ciliaBinning, useJw, o_FU, o_FU0);
   ptoc("udfSource::addCiliaForce");
 }
 
@@ -953,6 +1419,296 @@ void locatePanels(const std::vector<dfloat> &px, const std::vector<dfloat> &py, 
   ptoc("udfSource::find");
 }
 
+// ---------------------------------------------------------------------------
+// kinematics and binning on the device (iqn path). The device panel layout holds the cilia kinCilia (global
+// ids, ascending), panel kk N_p + i = panel i of cilium kinCilia[kk]. the rank's localCilia (own + halo).
+// Binning: each x-y bin column lists the cilia whose beat footprint (ciliumColumns) touches it; ciliaBinColumns
+// walks those lists, so the bins come out in the host sort's order without atomics. A panel outside its
+// footprint would be dropped: ciliaBinScan counts the shortfall in o_binLost (checked at the diagnostics).
+// ---------------------------------------------------------------------------
+std::vector<int> kinCilia;
+occa::memory o_kinRoot, o_beatCoef, o_colStart, o_colCilia, o_binCnt, o_binLost;
+int kinChecks = 0;
+dfloat kinErr[4] = {0, 0, 0, 0};   // the last kinematicsCompare: x, V, t l, wrapped points
+long kinDiff[2] = {0, 0};          // and differing binStart, binPanel entries
+
+void setupDeviceKinematics(const std::vector<int> &cilia) {
+  kinCilia = cilia;
+  kinPanels = cilia.size() * N_p;
+  const int nc = cilia.size();
+  std::vector<dfloat> root(std::max(1, nc * 3), 0.0);
+  for (int kk = 0; kk < nc; kk++) {
+    root[kk * 3 + 0] = xc[cilia[kk]];
+    root[kk * 3 + 1] = yc[cilia[kk]];
+    root[kk * 3 + 2] = beta_c[cilia[kk]];
+  }
+  o_kinRoot = platform->device.malloc<dfloat>(root.size());
+  o_kinRoot.copyFrom(root.data());
+  std::vector<dfloat> coef;
+  coef.insert(coef.end(), A1, A1 + 21);
+  coef.insert(coef.end(), A2, A2 + 21);
+  coef.insert(coef.end(), B1, B1 + 18);
+  coef.insert(coef.end(), B2, B2 + 18);
+  o_beatCoef = platform->device.malloc<dfloat>(coef.size());
+  o_beatCoef.copyFrom(coef.data());
+
+  // Column candidate lists (CSR), cilia ascending in each column
+  const int nCol = nbx * nby;
+  std::vector<int> colStart(nCol + 1, 0);
+  std::vector<int> foot(nc * 4);
+  for (int kk = 0; kk < nc; kk++) {
+    int *f = &foot[kk * 4];
+    ciliumColumns(cilia[kk], f[0], f[1], f[2], f[3]);
+    for (int jy = 0; jy < f[3]; jy++)
+      for (int jx = 0; jx < f[1]; jx++) colStart[((f[2] + jy) % nby) * nbx + (f[0] + jx) % nbx + 1]++;
+  }
+  for (int c = 0; c < nCol; c++) colStart[c + 1] += colStart[c];
+  std::vector<int> colCilia(std::max(1, colStart[nCol])), next(colStart.begin(), colStart.end() - 1);
+  int colMax = 0;
+  for (int c = 0; c < nCol; c++) colMax = std::max(colMax, colStart[c + 1] - colStart[c]);
+  for (int kk = 0; kk < nc; kk++) {
+    const int *f = &foot[kk * 4];
+    for (int jy = 0; jy < f[3]; jy++)
+      for (int jx = 0; jx < f[1]; jx++) colCilia[next[((f[2] + jy) % nby) * nbx + (f[0] + jx) % nbx]++] = kk;
+  }
+  o_colStart = platform->device.malloc<int>(colStart.size());
+  o_colStart.copyFrom(colStart.data());
+  o_colCilia = platform->device.malloc<int>(colCilia.size());
+  o_colCilia.copyFrom(colCilia.data());
+  o_binCnt = platform->device.malloc<int>((size_t)nCol * nbz);
+  o_binLost = platform->device.malloc<int>(1);
+  const int zero = 0;
+  o_binLost.copyFrom(&zero, 1);
+  std::vector<int> start0((size_t)nCol * nbz + 1, 0);   // the bins of a rank with no panels stay empty
+  o_binStart.copyFrom(start0.data());
+
+  if (platform->comm.mpiRank() == 0)
+    printf("cilia: device kinematics + binning: %d cilia, %d panels; column lists %.1f cilia per cilium, max %d per"
+           " column; kinematicsCheck = %d\n", nc, kinPanels, nc > 0 ? (double)colStart[nCol] / nc : 0.0, colMax,
+           kinematicsCheck);
+}
+
+void deviceKinematics(double time) {
+  const dfloat pi = 4.0 * atan(1.0);
+  const dfloat omega = 2.0 * pi * f_beat;
+  ptic("udfSource::kinematics");   // tic/toc also with no local cilia (see gatherOwnKinematics)
+  if (kinPanels > 0) {
+    ciliaKinematics(kinPanels, N_p, N_o, (int)(kinematics == "rod"), (int)(panelLength == "arclength"),
+                    (dfloat)time, omega, L_c, l_panel, (int)(rodAxis[0] - 'x'), (int)(rodVelocity[0] - 'x'),
+                    rodCentreZ, xmin, ymin, Lx, Ly, o_kinRoot, o_beatCoef, o_xpc, o_V, o_TL, o_px, o_py, o_pz);
+  }
+  ptoc("udfSource::kinematics");
+  if (!ciliaBinning && !binningCheck) return;
+  ptic("udfSource::binPanels");
+  if (kinPanels == 0) { ptoc("udfSource::binPanels"); return; }
+  const int nCol = nbx * nby;
+  ciliaBinColumns(0, nCol, nbx, nby, nbz, N_p, xmin, ymin, zlo, hbx, hby, hbz, o_colStart, o_colCilia, o_px, o_py,
+                  o_pz, o_binStart, o_binCnt, o_binPanel);
+  ciliaBinScan(nCol * nbz, kinPanels, o_binCnt, o_binStart, o_binLost);
+  ciliaBinColumns(1, nCol, nbx, nby, nbz, N_p, xmin, ymin, zlo, hbx, hby, hbz, o_colStart, o_colCilia, o_px, o_py,
+                  o_pz, o_binStart, o_binCnt, o_binPanel);
+  ptoc("udfSource::binPanels");
+}
+
+// kinematicsCheck: the host kinematics and bin sort for the same cilia; max |device - host| / max |host| of x, V,
+// t l and the wrapped points, and the number of differing binStart and binPanel entries
+void kinematicsCompare(double time) {
+  std::vector<dfloat> X, V, TL, px, py, pz;
+  panelKinematics(time, X, V, TL, px, py, pz);
+  const int n = kinPanels;
+  std::vector<dfloat> hX(3 * n), hV(3 * n), hTL(4 * n), hP(3 * n), hpx(n), hpy(n), hpz(n);
+  for (int m = 0; m < n; m++) {
+    const int g = kinCilia[m / N_p] * N_p + m % N_p;
+    for (int c = 0; c < 3; c++) { hX[m * 3 + c] = X[g * 3 + c]; hV[m * 3 + c] = V[g * 3 + c]; }
+    for (int c = 0; c < 4; c++) hTL[m * 4 + c] = TL[g * 4 + c];
+    hpx[m] = px[g]; hpy[m] = py[g]; hpz[m] = pz[g];
+    hP[m * 3 + 0] = px[g]; hP[m * 3 + 1] = py[g]; hP[m * 3 + 2] = pz[g];
+  }
+  std::vector<dfloat> dX(3 * n), dV(3 * n), dTL(4 * n), dpx(n), dpy(n), dpz(n), dP(3 * n);
+  o_xpc.copyTo(dX.data(), 3 * n);
+  o_V.copyTo(dV.data(), 3 * n);
+  o_TL.copyTo(dTL.data(), 4 * n);
+  o_px.copyTo(dpx.data(), n);
+  o_py.copyTo(dpy.data(), n);
+  o_pz.copyTo(dpz.data(), n);
+  for (int m = 0; m < n; m++) { dP[m * 3 + 0] = dpx[m]; dP[m * 3 + 1] = dpy[m]; dP[m * 3 + 2] = dpz[m]; }
+  auto rel = [](const std::vector<dfloat> &a, const std::vector<dfloat> &b) {
+    dfloat e = 0, r = 0;
+    for (size_t j = 0; j < b.size(); j++) { e = std::max(e, std::abs(a[j] - b[j])); r = std::max(r, std::abs(b[j])); }
+    return r > 0 ? e / r : e;
+  };
+  dfloat err[4] = {rel(dX, hX), rel(dV, hV), rel(dTL, hTL), rel(dP, hP)};
+  long diff[2] = {0, 0};
+  if (ciliaBinning || binningCheck) {
+    std::vector<int> hs, hp, ds((size_t)nbx * nby * nbz + 1), dp(std::max(1, n));
+    hostBinSort(hpx, hpy, hpz, hs, hp);
+    o_binStart.copyTo(ds.data(), ds.size());
+    o_binPanel.copyTo(dp.data(), n);
+    for (size_t b = 0; b < hs.size(); b++) diff[0] += hs[b] != ds[b];
+    for (int m = 0; m < n; m++) diff[1] += hp[m] != dp[m];
+  }
+  auto comm = platform->comm.mpiComm();
+  MPI_Allreduce(MPI_IN_PLACE, err, 4, MPI_DFLOAT, MPI_MAX, comm);
+  MPI_Allreduce(MPI_IN_PLACE, diff, 2, MPI_LONG, MPI_SUM, comm);
+  std::copy(err, err + 4, kinErr);
+  std::copy(diff, diff + 2, kinDiff);
+  if (platform->comm.mpiRank() == 0)
+    printf("%d %.10e %.3e %.3e %.3e %.3e %ld %ld  kincheck\n", kinChecks, time, err[0], err[1], err[2], err[3], diff[0],
+           diff[1]);
+}
+
+// ---------------------------------------------------------------------------
+// the distributed iqn layouts. Own cilia = ownLocal positions in localCilia (ascending global id); own panel
+// jj N_p + i = panel i of the jj-th own cilium. gatherOwnKinematics copies the own panels' x, V, t l and wrapped points
+// out of the local arrays (find / eval query only these; nQ >= 1: a rank with no own cilia queries one dummy point
+// so the collective find / eval still run). deviceHaloExchange fills o_fl: the own F scattered in, the halo F received
+// from the owners (host-staged MPI, lists from setupOwnership).
+// ---------------------------------------------------------------------------
+int nOwn = 0, nOwnPanels = 0, nQ = 1;
+occa::memory o_ownLoc, o_sendIdx, o_recvIdx, o_sbuf, o_rbuf;
+std::vector<int> sendOff, recvOff;                // per nbrRank entry: first cilium in the send / receive buffer
+std::vector<dfloat> h_sbuf, h_rbuf;
+
+void setupDistributedIqn() {
+  nOwn = ownLocal.size();
+  nOwnPanels = nOwn * N_p;
+  nQ = std::max(1, nOwnPanels);
+  const size_t nl = std::max(1, kinPanels);
+  o_xpc = platform->device.malloc<dfloat>(nl * 3);
+  o_V   = platform->device.malloc<dfloat>(nl * 3);
+  o_TL  = platform->device.malloc<dfloat>(nl * 4);
+  o_px  = platform->device.malloc<dfloat>(nl);
+  o_py  = platform->device.malloc<dfloat>(nl);
+  o_pz  = platform->device.malloc<dfloat>(nl);
+  o_fl  = platform->device.malloc<dfloat>(nl * 3);
+  o_binPanel = platform->device.malloc<int>(nl);
+  o_xo  = platform->device.malloc<dfloat>(nQ * 3);
+  o_Vo  = platform->device.malloc<dfloat>(nQ * 3);
+  o_TLo = platform->device.malloc<dfloat>(nQ * 4);
+  o_pxo = platform->device.malloc<dfloat>(nQ);
+  o_pyo = platform->device.malloc<dfloat>(nQ);
+  o_pzo = platform->device.malloc<dfloat>(nQ);
+  o_upc = platform->device.malloc<dfloat>(nQ * 3);
+  o_f   = platform->device.malloc<dfloat>(nQ * 3);
+  std::vector<dfloat> zeros(nQ * 4, 0.0), dummy(nQ, 0.0);
+  o_f.copyFrom(zeros.data(), nQ * 3);
+  dummy[0] = xmin;   // the dummy point of a rank with no own cilia: the box corner on the wall, as in setupOwnership
+  o_pxo.copyFrom(dummy.data(), nQ);
+  dummy[0] = ymin;
+  o_pyo.copyFrom(dummy.data(), nQ);
+  dummy[0] = 0.0;
+  o_pzo.copyFrom(dummy.data(), nQ);
+  std::vector<int> own(std::max(1, nOwn), 0);
+  for (int j = 0; j < nOwn; j++) own[j] = ownLocal[j];
+  o_ownLoc = platform->device.malloc<int>(own.size());
+  o_ownLoc.copyFrom(own.data());
+
+  // Halo exchange lists, flattened over the neighbours
+  std::vector<int> sIdx, rIdx;
+  sendOff.assign(nbrRank.size() + 1, 0);
+  recvOff.assign(nbrRank.size() + 1, 0);
+  for (size_t j = 0; j < nbrRank.size(); j++) {
+    sIdx.insert(sIdx.end(), sendLocal[j].begin(), sendLocal[j].end());
+    rIdx.insert(rIdx.end(), recvLocal[j].begin(), recvLocal[j].end());
+    sendOff[j + 1] = sIdx.size();
+    recvOff[j + 1] = rIdx.size();
+  }
+  const size_t w = 3 * N_p;
+  o_sendIdx = platform->device.malloc<int>(std::max<size_t>(1, sIdx.size()));
+  o_recvIdx = platform->device.malloc<int>(std::max<size_t>(1, rIdx.size()));
+  if (!sIdx.empty()) o_sendIdx.copyFrom(sIdx.data());
+  if (!rIdx.empty()) o_recvIdx.copyFrom(rIdx.data());
+  o_sbuf = platform->device.malloc<dfloat>(std::max<size_t>(1, sIdx.size() * w));
+  o_rbuf = platform->device.malloc<dfloat>(std::max<size_t>(1, rIdx.size() * w));
+  h_sbuf.assign(sIdx.size() * w, 0.0);
+  h_rbuf.assign(rIdx.size() * w, 0.0);
+  if (platform->comm.mpiRank() == 0)
+    printf("cilia: distributed iqn: own panels %d (rank 0), local %d; halo F exchange host-staged\n", nOwnPanels,
+           kinPanels);
+}
+
+// Timers: every rank must tic/toc the same tags, also with no work (a rank with no own or local cilia), since
+// nekRS's runtime statistics allreduce per tag; a tag missing on one rank deadlocks the print
+void gatherOwnKinematics() {
+  ptic("udfSource::gatherOwn");
+  if (nOwn > 0) {
+    ciliaGatherBlocks(nOwn, 3 * N_p, o_ownLoc, o_xpc, o_xo);
+    ciliaGatherBlocks(nOwn, 3 * N_p, o_ownLoc, o_V, o_Vo);
+    ciliaGatherBlocks(nOwn, 4 * N_p, o_ownLoc, o_TL, o_TLo);
+    ciliaGatherBlocks(nOwn, N_p, o_ownLoc, o_px, o_pxo);
+    ciliaGatherBlocks(nOwn, N_p, o_ownLoc, o_py, o_pyo);
+    ciliaGatherBlocks(nOwn, N_p, o_ownLoc, o_pz, o_pzo);
+  }
+  ptoc("udfSource::gatherOwn");
+}
+
+// o_fl <- o_f (own, scattered) and the halo cilia's F from their owners. Called once per corrector, before the spread
+void deviceHaloExchange() {
+  ptic("udfSource::haloExchange");
+  const int w = 3 * N_p;
+  if (nOwn > 0) ciliaScatterBlocks(nOwn, w, o_ownLoc, o_f, o_fl);
+  const int nSend = sendOff.back(), nRecv = recvOff.back();
+  if (!nbrRank.empty()) {
+    auto comm = platform->comm.mpiComm();
+    if (nSend > 0) {
+      ciliaGatherBlocks(nSend, w, o_sendIdx, o_fl, o_sbuf);
+      o_sbuf.copyTo(h_sbuf.data(), (size_t)nSend * w);
+    }
+    std::vector<MPI_Request> req;
+    for (size_t j = 0; j < nbrRank.size(); j++) {
+      const int cnt = (recvOff[j + 1] - recvOff[j]) * w;
+      if (cnt == 0) continue;
+      req.emplace_back();
+      MPI_Irecv(h_rbuf.data() + (size_t)recvOff[j] * w, cnt, MPI_DFLOAT, nbrRank[j], 31, comm, &req.back());
+    }
+    for (size_t j = 0; j < nbrRank.size(); j++) {
+      const int cnt = (sendOff[j + 1] - sendOff[j]) * w;
+      if (cnt == 0) continue;
+      req.emplace_back();
+      MPI_Isend(h_sbuf.data() + (size_t)sendOff[j] * w, cnt, MPI_DFLOAT, nbrRank[j], 31, comm, &req.back());
+    }
+    MPI_Waitall(req.size(), req.data(), MPI_STATUSES_IGNORE);
+    if (nRecv > 0) {
+      o_rbuf.copyFrom(h_rbuf.data(), (size_t)nRecv * w);
+      ciliaScatterBlocks(nRecv, w, o_recvIdx, o_rbuf, o_fl);
+    }
+  }
+  ptoc("udfSource::haloExchange");
+}
+
+// The own panels' entries (nc per panel) of a global-layout host vector
+std::vector<dfloat> ownSlice(const std::vector<dfloat> &global, int nc) {
+  const size_t w = (size_t)N_p * nc;
+  std::vector<dfloat> v(nOwn * w);
+  for (int j = 0; j < nOwn; j++) {
+    const size_t g = localCilia[ownLocal[j]];
+    std::copy(global.begin() + g * w, global.begin() + (g + 1) * w, v.begin() + j * w);
+  }
+  return v;
+}
+
+// Gather an own-layout host vector (nc entries per panel) to rank 0 in global panel order; empty on the other ranks
+std::vector<dfloat> gatherOwnToRoot(const std::vector<dfloat> &slice, int nc) {
+  auto comm = platform->comm.mpiComm();
+  const size_t w = (size_t)N_p * nc;
+  std::vector<int> cnt(nRanks, 0), disp(nRanks + 1, 0);
+  for (int k = 0; k < N_cilia; k++) cnt[ciliumOwner[k]] += w;
+  for (int r = 0; r < nRanks; r++) disp[r + 1] = disp[r] + cnt[r];
+  std::vector<dfloat> all, out;
+  if (myRank == 0) all.resize(disp[nRanks]);
+  MPI_Gatherv(slice.data(), (int)slice.size(), MPI_DFLOAT, all.data(), cnt.data(), disp.data(), MPI_DFLOAT, 0, comm);
+  if (myRank == 0) {
+    out.resize((size_t)N_cilia * w);
+    std::vector<int> next(disp.begin(), disp.end() - 1);
+    for (int k = 0; k < N_cilia; k++) {
+      const int r = ciliumOwner[k];
+      std::copy(all.begin() + next[r], all.begin() + next[r] + w, out.begin() + (size_t)k * w);
+      next[r] += w;
+    }
+  }
+  return out;
+}
+
 // Fluid velocity at the located panel centres, component-major (u_pc[m + c N_part]); -999.0 marks lost points
 std::vector<dfloat> samplePanelVelocity() {
   ptic("udfSource::eval");
@@ -964,7 +1720,7 @@ std::vector<dfloat> samplePanelVelocity() {
   return u_pc;
 }
 
-// M.3: u_bg = u - (each cilium's own free-space flow from the force that produced u: sum_h c_h f_h spread at x_h)
+// u_bg = u - (each cilium's own free-space flow from the force that produced u: sum_h c_h f_h spread at x_h)
 void subtractOwnFlow(std::vector<dfloat> &u_pc, const std::vector<dfloat> &x_pc,
                      const std::vector<std::vector<dfloat>> &f_h, const std::vector<std::vector<dfloat>> &x_h,
                      const std::vector<dfloat> &c_h) {
@@ -1003,7 +1759,7 @@ std::vector<dfloat> rftForce(const std::vector<dfloat> &tl_pc, const std::vector
     for(int i=0; i<N_p; i++) {
       int idx = k * N_p + i;
 
-      // Unit tangent t and panel length l from panelKinematics (M.5 panelLength)
+      // Unit tangent t and panel length l from panelKinematics (panelLength)
       const dfloat tx = tl_pc[idx*4 + 0], ty = tl_pc[idx*4 + 1], tz = tl_pc[idx*4 + 2];
 
       dfloat Vx = 0.0, Vy = 0.0, Vz = 0.0;
@@ -1049,7 +1805,7 @@ void userForcing(double time) {
   locatePanels(px, py, pz);
   std::vector<dfloat> u_pc = samplePanelVelocity();
 
-  // M.3: the subtracted force is the one that produced u, sum_i c_i f_i spread at x_i
+  // the subtracted force is the one that produced u, sum_i c_i f_i spread at x_i
   // (f_old at the current positions alone gives an O(dt) error)
   std::vector<dfloat> c_ext(nrs->o_coeffEXT.size());
   nrs->o_coeffEXT.copyTo(c_ext.data());
@@ -1087,7 +1843,7 @@ void userForcing(double time) {
     f_old[m] = f[m];
   }
 
-  // M.3: drag delivered vs RFT, sum over panels of f.V / (R mu C L_c), C for the rod's V direction
+  // drag delivered vs RFT, sum over panels of f.V / (R mu C L_c), C for the rod's V direction
   if (kinematics == "rod" && platform->comm.mpiRank() == 0) {
     const int dv = rodVelocity[0] - 'x';
     const dfloat C = (rodAxis == rodVelocity) ? C_par : C_perp;
@@ -1138,17 +1894,20 @@ void userForcing(double time) {
 }
 
 // ---------------------------------------------------------------------------
-// M.6 implicit coupling (couplingScheme = iqn). Per step, the unknown is F, the panel forces applied at x(t_{n+1});
+// Implicit coupling (couplingScheme = iqn). Per step, the unknown is F, the panel forces applied at x(t_{n+1});
 // H(F) = C (V - u(F) + S F) is f* from the u that F produced (Stokes: H is affine in F within a step).
 // IQN-ILS solves H(F) = F with secant pairs dR = r^{k+1} - r^k, dX = H^{k+1} - H^k (r = H(F) - F):
 // c = argmin |dR c + r|, F^{k+1} = H(F^k) + dX c; pairs from the last couplingReuse steps are kept.
 // The force is added straight into o_JwF (built once per step by makeForcing, read by the pressure and velocity
 // solves), so o_EXT holds no cilia force and nothing is extrapolated.
 // ---------------------------------------------------------------------------
+// distributed. The unknown F lives on the OWN panels (n = 3 nOwnPanels per rank): the pool vectors, residual,
+// least squares and update. Dot products are summed over the ranks (poolDots: reduce to rank 0 + broadcast, so every
+// rank gets the same bits and takes the same decisions), and the small Gram / Cholesky solve is done on every rank.
+// Each corrector the own F is scattered into the local layout and the halo F comes from the owners (deviceHaloExchange).
 occa::memory o_JwF0;                                  // o_JwF without the cilia force, saved at corrector 1
-std::vector<dfloat> iqnX, iqnV, iqnTL;                // panel positions, velocities, tangents and lengths at t_{n+1}
-occa::memory o_V, o_TL;                               // P2.2: the same on the device (o_xpc holds the positions)
-// P2.2: the iterate lives on the device. F^k is o_f; every other n-vector (n = 3 N_part) is a slot of one pool:
+std::vector<dfloat> iqnX, iqnV, iqnTL;                // host copies of x, V, t l at t_{n+1} (iqnCheck only)
+// the iterate lives on the device. F^k is o_f; every other n-vector (n = 3 N_part) is a slot of one pool:
 // fixed slots r, H of this corrector, r, H of the previous one (swapped each corrector), H of the converged step
 // (restart file) and the converged F of the last steps (predictor); the rest hold secant pairs (dR, dX) from a free
 // list. The QR of the secant columns is replaced by their Gram matrix G (dR_a . dR_b by slot, one new row per
@@ -1173,7 +1932,8 @@ long iqnItersSum = 0, iqnSteps = 0, iqnMaxed = 0, iqnRestarts = 0;
 // P2 diagnostic: how far the panel forces are from tile-periodic. partner[d][k] is the cilium whose root is
 // cilium k's root shifted by one tile in x (d = 0) or y (d = 1), wrapped into the box; -1 if none
 std::vector<int> tilePartner[2];
-void tileAsymmetry(double time, const std::vector<dfloat> &F) {
+void tileAsymmetry(double time, const std::vector<dfloat> &F) {   // F: all panels, on rank 0 (empty elsewhere)
+  if (myRank != 0) return;
   if (tilePartner[0].empty()) {
     for (int d = 0; d < 2; d++) {
       tilePartner[d].assign(N_cilia, -1);
@@ -1212,14 +1972,14 @@ dfloat vdot(const std::vector<dfloat> &a, const std::vector<dfloat> &b) {
   return s;
 }
 
-// P2.2 pool helpers. Slots keep their index when the pool grows (doubling)
+// Pool helpers. Slots keep their index when the pool grows (doubling)
 void poolReserve(int cap) {
-  const int n = 3 * N_part;
+  const int n = 3 * nOwnPanels;
   if (cap <= poolCap) return;
   nekrsCheck((double)cap * n >= 2147483647.0, platform->comm.mpiComm(), EXIT_FAILURE,
              "IQN pool of %d x %d exceeds the int index range\n", cap, n);
-  occa::memory o_new = platform->device.malloc<dfloat>((size_t)cap * n);
-  if (poolCap > 0) o_new.copyFrom(o_pool, (size_t)poolCap * n);
+  occa::memory o_new = platform->device.malloc<dfloat>(std::max<size_t>((size_t)cap * n, 1));
+  if (poolCap > 0 && n > 0) o_new.copyFrom(o_pool, (size_t)poolCap * n);
   o_pool = o_new;
   std::vector<double> G((size_t)cap * cap, 0.0);
   for (int a = 0; a < poolCap; a++)
@@ -1247,33 +2007,42 @@ template <typename T> void ensureSize(occa::memory &o, size_t count) {
 }
 
 std::vector<dfloat> poolGet(int s) {
-  std::vector<dfloat> v(3 * N_part);
+  std::vector<dfloat> v(3 * nOwnPanels);
   o_pool.copyTo(v.data(), v.size(), (size_t)s * v.size());
   return v;
 }
 
-// Dot products of pool slots A[p] . B[p] on the device; the chunk partials are summed on the host in order
+// Dot products of pool slots A[p] . B[p] on the device; the chunk partials are summed on the host in order, then over
+// the ranks (reduce to rank 0 and broadcast: every rank holds the same bits, so the Cholesky and the stop test agree)
 std::vector<double> poolDots(const std::vector<int> &A, const std::vector<int> &B) {
-  const int n = 3 * N_part, np = A.size();
+  const int n = 3 * nOwnPanels, np = A.size();
   const int nChunk = std::max(1, std::min(64, (n + 4095) / 4096));
-  ensureSize<int>(o_dotA, np);
-  ensureSize<int>(o_dotB, np);
-  ensureSize<dfloat>(o_dotPart, (size_t)np * nChunk);
-  o_dotA.copyFrom(A.data(), np);
-  o_dotB.copyFrom(B.data(), np);
-  iqnPoolDots(n, np, nChunk, o_dotA, o_dotB, o_pool, o_dotPart);
-  std::vector<dfloat> part((size_t)np * nChunk);
-  o_dotPart.copyTo(part.data(), part.size());
   std::vector<double> d(np, 0.0);
-  for (int p = 0; p < np; p++)
-    for (int c = 0; c < nChunk; c++) d[p] += part[(size_t)p * nChunk + c];
+  if (n > 0) {
+    ensureSize<int>(o_dotA, np);
+    ensureSize<int>(o_dotB, np);
+    ensureSize<dfloat>(o_dotPart, (size_t)np * nChunk);
+    o_dotA.copyFrom(A.data(), np);
+    o_dotB.copyFrom(B.data(), np);
+    iqnPoolDots(n, np, nChunk, o_dotA, o_dotB, o_pool, o_dotPart);
+    std::vector<dfloat> part((size_t)np * nChunk);
+    o_dotPart.copyTo(part.data(), part.size());
+    for (int p = 0; p < np; p++)
+      for (int c = 0; c < nChunk; c++) d[p] += part[(size_t)p * nChunk + c];
+  }
+  if (nRanks > 1) {
+    auto comm = platform->comm.mpiComm();
+    MPI_Reduce(myRank == 0 ? MPI_IN_PLACE : d.data(), d.data(), np, MPI_DOUBLE, MPI_SUM, 0, comm);
+    MPI_Bcast(d.data(), np, MPI_DOUBLE, 0, comm);
+  }
   return d;
 }
 
 // out = a0 base + sum_j coef[j] slot_j, base = pool slot baseSlot or out itself (baseSlot < 0)
 void poolCombine(occa::memory &o_out, dfloat a0, int baseSlot, const std::vector<int> &slots,
                  const std::vector<dfloat> &coef) {
-  const int n = 3 * N_part, q = slots.size();
+  const int n = 3 * nOwnPanels, q = slots.size();
+  if (n == 0) return;
   ensureSize<int>(o_cSlots, std::max(q, 1));
   ensureSize<dfloat>(o_cCoef, std::max(q, 1));
   if (q > 0) { o_cSlots.copyFrom(slots.data(), q); o_cCoef.copyFrom(coef.data(), q); }
@@ -1286,7 +2055,7 @@ dfloat relMaxDiff(const std::vector<dfloat> &a, const std::vector<dfloat> &ref) 
   return m > 0 ? d / m : d;
 }
 
-// The pre-P2.2 host update, kept for iqnCheck: QR of the candidate columns (newest first) by modified Gram-Schmidt
+// The earlier host update (from before the iterate moved to the device), kept for iqnCheck: QR of the candidate columns (newest first) by modified Gram-Schmidt
 // (twice), dropping columns nearly dependent on the newer ones; F = H + W c, c = -R^{-1} Q^T r, or F + omega r
 std::vector<dfloat> iqnSolveMGS(const std::vector<std::vector<dfloat>> &candR, const std::vector<std::vector<dfloat>> &candX,
                                 const std::vector<dfloat> &r, const std::vector<dfloat> &H, const std::vector<dfloat> &F,
@@ -1336,7 +2105,7 @@ std::vector<dfloat> iqnSolveMGS(const std::vector<std::vector<dfloat>> &candR, c
 void ciliaPreFluid(double time, int tstep) {
   if (N_part == 0 || !couplingIQN) return;
   const int iter = nrs->outerCorrector;
-  const int n = 3 * N_part;
+  const int n = 3 * nOwnPanels;
 
   if (iter == 1) {
     if (restoreForceHistory) {
@@ -1345,14 +2114,13 @@ void ciliaPreFluid(double time, int tstep) {
     }
     iqnTime = time;
     iqnR = std::min((dfloat)1.0, (dfloat)(time / T_ramp));
-    std::vector<dfloat> px, py, pz;
-    ptic("udfSource::kinematics");   // P2.2: includes the uploads of x, V and t, l
-    panelKinematics(time, iqnX, iqnV, iqnTL, px, py, pz);
-    o_xpc.copyFrom(iqnX.data());
-    o_V.copyFrom(iqnV.data());
-    o_TL.copyFrom(iqnTL.data());
-    ptoc("udfSource::kinematics");
-    locatePanels(px, py, pz);
+    deviceKinematics(time);   // x, V, t l, the wrapped points and the bins of the local cilia, on the device
+    if (kinChecks < kinematicsCheck) { kinChecks++; kinematicsCompare(time); }
+    gatherOwnKinematics();    // find / eval and the panel force use the own panels only
+    ptic("udfSource::find");
+    interp->setPoints(o_pxo, o_pyo, o_pzo);
+    interp->find();
+    ptoc("udfSource::find");
 
     // Predictor: extrapolate the converged forces with nekRS's EXT coefficients for this step
     std::vector<dfloat> c_ext(nrs->o_coeffEXT.size());
@@ -1361,7 +2129,9 @@ void ciliaPreFluid(double time, int tstep) {
     if (nFconv == 0) {   // first step (or restart): f_old is zero or the restored force
       nFconv = c_ext.size();
       nekrsCheck(nFconv > maxFconv, platform->comm.mpiComm(), EXIT_FAILURE, "EXT order %d > %d\n", nFconv, maxFconv);
-      for (int h = 0; h < nFconv; h++) o_pool.copyFrom(f_old.data(), n, (size_t)sFconv[h] * n);
+      const std::vector<dfloat> fOwn = ownSlice(f_old, 3);
+      for (int h = 0; h < nFconv; h++)
+        if (n > 0) o_pool.copyFrom(fOwn.data(), n, (size_t)sFconv[h] * n);
     }
     poolCombine(o_f, 0.0, -1, std::vector<int>(sFconv, sFconv + nFconv), c_ext);
 
@@ -1371,28 +2141,27 @@ void ciliaPreFluid(double time, int tstep) {
     o_JwF0.copyFrom(nrs->fluid->o_JwF);
   }
 
-  ptic("udfSource::copyForces");
-  nrs->fluid->o_JwF.copyFrom(o_JwF0);
-  ptoc("udfSource::copyForces");
-  spreadForces(1, nrs->fluid->o_JwF);
+  deviceHaloExchange();
+  spreadForces(1, nrs->fluid->o_JwF, &o_JwF0);   // o_JwF = o_JwF0 + spread, no copy first
 }
 
 // nrs->userConvergenceCheck: after each corrector's fluid solve; true ends the step
 bool ciliaConverged(int iter) {
   if (N_part == 0 || !couplingIQN) return true;
-  const int n = 3 * N_part;
-  const bool check = iqnChecks < iqnCheck;
+  const int n = 3 * nOwnPanels;
+  const bool check = iqnChecks < iqnCheck;   // iqnCheck: 1 rank only (own = all cilia; checked at setup)
   if (check) iqnChecks++;
 
   ptic("udfSource::eval");
-  platform->linAlg->fill(n, -999.0, o_upc);
-  interp->eval(nrs->meshV->dim, nrs->fluid->fieldOffset, nrs->fluid->o_U, N_part, o_upc, N_part);
+  platform->linAlg->fill(3 * nQ, -999.0, o_upc);
+  interp->eval(nrs->meshV->dim, nrs->fluid->fieldOffset, nrs->fluid->o_U, nQ, o_upc, nQ);
   ptoc("udfSource::eval");
 
-  ptic("udfSource::panelForce");   // P2.2: includes the self-flow subtraction (was udfSource::selfFlow, host)
+  ptic("udfSource::panelForce");   // includes the self-flow subtraction (was udfSource::selfFlow, host)
   const dfloat pi = 4.0 * atan(1.0);
-  ciliaPanelForce(N_part, N_p, o_xpc, o_V, o_TL, o_upc, o_f, subtractSelfFlow == 1 ? 1 : 0, iqnR, mu_hat, C_par,
-                  C_perp, epsilon, kernel2, pi, (dlong)sH * n, o_pool);
+  if (nOwnPanels > 0)
+    ciliaPanelForce(nOwnPanels, N_p, o_xo, o_Vo, o_TLo, o_upc, o_f, subtractSelfFlow == 1 ? 1 : 0, iqnR, mu_hat, C_par,
+                    C_perp, epsilon, kernel2, pi, (dlong)sH * n, o_pool);
   ptoc("udfSource::panelForce");
 
   // iqnCheck: the host path (eval copy, subtractOwnFlow, rftForce) on the same u and F
@@ -1403,6 +2172,10 @@ bool ciliaConverged(int iter) {
     o_upc.copyTo(u.data(), n);
     Fhost.resize(n);
     o_f.copyTo(Fhost.data(), n);
+    iqnX.resize(n); iqnV.resize(n); iqnTL.resize(4 * N_part);   // the kinematics live on the device
+    o_xo.copyTo(iqnX.data(), n);
+    o_Vo.copyTo(iqnV.data(), n);
+    o_TLo.copyTo(iqnTL.data(), 4 * N_part);
     if (subtractSelfFlow == 1) subtractOwnFlow(u, iqnX, {Fhost}, {iqnX}, {1.0});
     errH = relMaxDiff(poolGet(sH), rftForce(iqnTL, iqnV, u, iqnR));
   }
@@ -1410,8 +2183,9 @@ bool ciliaConverged(int iter) {
   ptic("udfSource::iqnUpdate");   // residual, history, least squares, update; stopped on both returns
   int sDR = 0, sDX = 0;
   if (iter > 1) { sDR = newSlot(); sDX = newSlot(); }
-  iqnResidual(n, iter > 1 ? 1 : 0, (dlong)sH * n, (dlong)sR * n, (dlong)sHp * n, (dlong)sRp * n, (dlong)sDR * n,
-              (dlong)sDX * n, o_f, o_pool);
+  if (n > 0)
+    iqnResidual(n, iter > 1 ? 1 : 0, (dlong)sH * n, (dlong)sR * n, (dlong)sHp * n, (dlong)sRp * n, (dlong)sDR * n,
+                (dlong)sDX * n, o_f, o_pool);
   if (iter > 1) iqnCur.push_back({sDR, sDX});
 
   // One launch: r.r, H.H, r.dR for every live column, and the new dR with every live column (a new row of G)
@@ -1434,7 +2208,7 @@ bool ciliaConverged(int iter) {
     printf("%.10e %d %.3e  iqnres\n", iqnTime, iter, Hn > 0 ? rn / Hn : 0.0);
   if (converged || iter >= couplingMaxIter) {
     for (int h = nFconv - 1; h > 0; h--) std::swap(sFconv[h], sFconv[h - 1]);
-    o_pool.copyFrom(o_f, n, (size_t)sFconv[0] * n, 0);   // the force the converged u came from (restart file: f_old)
+    if (n > 0) o_pool.copyFrom(o_f, n, (size_t)sFconv[0] * n, 0);   // the force the converged u came from (restart file: f_old)
     std::swap(sH, sHconv);                               // its H (fstar_old)
     if (couplingReuse > 0) {
       iqnOld.insert(iqnOld.begin(), iqnCur);
@@ -1448,8 +2222,8 @@ bool ciliaConverged(int iter) {
     if (!converged) iqnMaxed++;
     if (tilePeriod > 0) {
       std::vector<dfloat> F(n);
-      o_f.copyTo(F.data(), n);
-      tileAsymmetry(iqnTime, F);
+      if (n > 0) o_f.copyTo(F.data(), n);
+      tileAsymmetry(iqnTime, gatherOwnToRoot(F, 3));   // global F on rank 0
     }
     if (platform->comm.mpiRank() == 0) {
       printf("%.10e %d %.3e %ld  iqn\n", iqnTime, iter, Hn > 0 ? rn / Hn : 0.0, iqnMaxed);
@@ -1459,7 +2233,7 @@ bool ciliaConverged(int iter) {
     return true;
   }
 
-  // P2.6 restart: the earlier steps' pairs have gone stale (the Jacobian moved); go on with this step's only
+  // restart: the earlier steps' pairs have gone stale (the Jacobian moved); go on with this step's only
   if (couplingRestart > 0 && iter == couplingRestart) {
     for (const auto &s : iqnOld) freePairs(s);
     iqnOld.clear();
@@ -1597,7 +2371,7 @@ void setupPlaneWeights(dfloat z0, occa::memory &o_W, occa::memory &o_WDz, dfloat
 }
 
 // One 'vals' and one 'wall' line per call, on rank 0 (gate.py reads both).
-// P1.4: one diagReduce kernel and one copy instead of 10 separate device reductions.
+// one diagReduce kernel and one copy instead of 10 separate device reductions.
 occa::memory o_diag;
 std::vector<dfloat> diagPartial;
 
@@ -1635,7 +2409,7 @@ void printDiagnostics(double time) {
   }
 }
 
-// P1.9 workaround for a nekRS v26 bug: divergenceSurfaceHex3D (pressure rhs) reads the averaged normal
+// Workaround for a nekRS v26 bug: divergenceSurfaceHex3D (pressure rhs) reads the averaged normal
 // (sgeo slots NXAVGID..NZAVGID = 15..17, mesh3D.h) on zeroDirichletX/Y/Z faces too, but only setAvgNormal
 // writes those slots, and it runs only for unaligned (zeroDirichletN) faces. On aligned faces they hold
 // uninitialized device memory, so copy the face normal (slots NXID..NZID = 0..2) there. Static mesh only.
@@ -1681,6 +2455,16 @@ void UDF_Setup() {
   MPI_Comm_rank(platform->comm.mpiComm(), &rank);
 
   readCaseData();
+
+  // the legacy paths hold all panels on every rank: one rank only
+  {
+    int size;
+    MPI_Comm_size(platform->comm.mpiComm(), &size);
+    nekrsCheck(size > 1 && (!couplingIQN || subtractSelfFlow == 2 || dumpPanelSteps > 0), platform->comm.mpiComm(),
+               EXIT_FAILURE, "%s\n", "explicit coupling, subtractSelfFlow = 2 and dumpPanelSteps run on 1 rank only");
+    nekrsCheck(size > 1 && iqnCheck > 0, platform->comm.mpiComm(), EXIT_FAILURE, "%s\n",
+               "iqnCheck runs on 1 rank only (kinematicsCheck and binningCheck work on any number)");
+  }
 
   if(rank == 0) {
     std::ifstream infile(coordinatesFile);
@@ -1735,7 +2519,7 @@ void UDF_Setup() {
            N_p, l_panel, slenderness, C_par, C_perp, mu_hat);
     printf("cilia: periodic box x = [%g, %g], y = [%g, %g]\n", xmin, xmin + Lx, ymin, ymin + Ly);
     if (kinematics == "rod")
-      printf("cilia: M.3 rod test: axis %s, velocity 1 along %s, centre z = %g; 'rod' lines: time, sum f.V/(mu C L), same for f*, mean u.V, mid-panel u.V\n",
+      printf("cilia: rod test: axis %s, velocity 1 along %s, centre z = %g; 'rod' lines: time, sum f.V/(mu C L), same for f*, mean u.V, mid-panel u.V\n",
              rodAxis.c_str(), rodVelocity.c_str(), rodCentreZ);
     printf("cilia: subtractSelfFlow = %d  dumpPanelSteps = %d  panelLength = %s\n", subtractSelfFlow, dumpPanelSteps,
            panelLength.c_str());
@@ -1752,8 +2536,8 @@ void UDF_Setup() {
   f_old.assign(N_part * 3, 0.0);
   fstar_old.assign(N_part * 3, 0.0);
 
-  if (N_part > 0) {
-      // P2.1: typed, so size() counts dfloats: pointInterpolation_t::setPoints takes nPoints = o_px.size(), and the
+  if (N_part > 0 && !couplingIQN) {   // iqn: setupDistributedIqn allocates by the local and own panel counts
+      // typed, so size() counts dfloats: pointInterpolation_t::setPoints takes nPoints = o_px.size(), and the
       // untyped (byte) buffers made find() search 8 N_part points, 7 N_part of them read past the end (tiled8 crash)
       o_xpc = platform->device.malloc<dfloat>(N_part * 3);
       o_f   = platform->device.malloc<dfloat>(N_part * 3);
@@ -1778,7 +2562,14 @@ void UDF_Setup() {
     nrs->userConvergenceCheck = &ciliaConverged;
   }
   interp = new pointInterpolation_t(nrs->meshV, platform->comm.mpiComm());
-  if (N_part > 0) setupBins();
+  if (N_part > 0) {
+    setupBins();
+    setupOwnership();
+    if (couplingIQN) {   // each rank computes its local cilia (own + halo) and iterates on its own
+      setupDeviceKinematics(localCilia);
+      setupDistributedIqn();
+    }
+  }
   fixAlignedAvgNormals();
 
   dfloat wallArea;
@@ -1794,11 +2585,17 @@ void UDF_Setup() {
 }
 
 void UDF_ExecuteStep(double time, int tstep) {
-  if (!nrs->timeStepConverged) return;   // M.6 iqn: nekRS calls this after every corrector
+  if (!nrs->timeStepConverged) return;   // iqn: nekRS calls this after every corrector
 
   if (diagInterval > 0 && tstep % diagInterval == 0) {
     ptic("udfExecuteStep::diagnostics");
     printDiagnostics(time);
+    if (couplingIQN && (ciliaBinning || binningCheck)) {   // panels outside their footprint (collective check)
+      int lost = 0;
+      if (kinPanels > 0) o_binLost.copyTo(&lost, 1);
+      nekrsCheck(lost != 0, platform->comm.mpiComm(), EXIT_FAILURE,
+                 "%d panel positions fell outside their cilium's beat footprint and were not binned\n", lost);
+    }
     ptoc("udfExecuteStep::diagnostics");
   }
 
@@ -1812,9 +2609,15 @@ void UDF_ExecuteStep(double time, int tstep) {
   } else if (nrs->checkpointStep) {
     nrs->copyToNek(time, tstep);
     nek::userchk();
-    if (couplingIQN && nFconv > 0) {   // P2.2: the converged F and its H live on the device
-      o_pool.copyTo(f_old.data(), f_old.size(), (size_t)sFconv[0] * f_old.size());
-      o_pool.copyTo(fstar_old.data(), fstar_old.size(), (size_t)sHconv * fstar_old.size());
+    if (couplingIQN && nFconv > 0) {   // the converged F and its H live on the device (own panels,
+      const size_t n = 3 * nOwnPanels;  // gathered to rank 0 by global id, which writes the restart file)
+      std::vector<dfloat> sF(n), sH(n);
+      if (n > 0) {
+        o_pool.copyTo(sF.data(), n, (size_t)sFconv[0] * n);
+        o_pool.copyTo(sH.data(), n, (size_t)sHconv * n);
+      }
+      const std::vector<dfloat> gF = gatherOwnToRoot(sF, 3), gH = gatherOwnToRoot(sH, 3);
+      if (myRank == 0) { f_old = gF; fstar_old = gH; }
     }
     writeForceHistory(time);
   }
