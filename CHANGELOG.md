@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+Development before this point was private. From here on it happens in this repository, so this entry covers everything since v0.3.0 in one step. Final figures are set at release.
+
+**Answers:** changed. N_p 20 → 40; worst metric ∫dv/dz moves 3.2e-3 of peak. New reference; production against it: L2 1.56e-4, L∞ 1.01e-3.
+**Speed:** 32.5 s/cycle, `small4`, one A100.
+**nekRS:** v26.0 `96b3cf9e`.
+
+Model and answers:
+- Production uses N_p = 40 (was 20), measured against N_p = 80 ([docs/running.md](docs/running.md#why-n_p--40)).
+- The one reference is now `cases/small4/reference.out`, at N_p = 40.
+- New gate rule: cycle L2 ≤ 2e-4 and maximum ≤ 2e-3 of peak, replacing the single 0.1% maximum ([ADR 0002](docs/adr/0002-definition-of-the-gate.md)). `--tol` is replaced by `--tol-l2`, `--tol-max` and `--tol-int`.
+- `gate.py` fails if the nekRS commit in the log differs from the new `NEKRS_VERSION`, and it prints file names only.
+
+Code:
+- Multiple GPUs: each rank holds its own cilia plus a halo, with kinematics and binning on the device. Multi-GPU speed isn't quoted yet.
+- `3d.udf` is now `cilia.udf`. Analysis scripts moved to `studies/`, and tests to `tests/`.
+- `job_template.sh` runs several cases on one node and reads an optional `cluster.env` and per-case `run.env`.
+
+Project:
+- GPU-less CI, a release check, and new docs: [scaling](docs/scaling.md), [releasing](docs/releasing.md), [decisions](docs/adr/), [CONTRIBUTING](CONTRIBUTING.md).
+
 ## v0.3.0 (2026-11-02)
 
 The cilia model on the GPU at scale. Same model and same answer as v0.2 (`small4` passes the gate against the v0.2 reference); on the 256-cilium `tiled8` case the cilia model drops from about half of every step to 2.8%, and its cost is now linear in the number of cilia.
@@ -37,7 +59,7 @@ Other:
 
 First public release.
 
-- Actuator-filament cilia model as a nekRS v26 udf (`3d.udf`): Fulford & Blake beat shape, resistive-force-theory drag, Gaussian-regularised body force computed in an OCCA kernel, periodic in x and y.
+- Actuator-filament cilia model as a nekRS v26 udf (`3d.udf`, now `cilia.udf`): Fulford & Blake beat shape, resistive-force-theory drag, Gaussian-regularised body force computed in an OCCA kernel, periodic in x and y.
 - `cases/small4/`: 4-cilium benchmark case (periodic 1 × 1 × 1.5 box, 1,200 elements) and the script that generates it.
 - `gate.py`: regression gate against two reference runs of `small4` (production settings, and N = 7, dt = 1e-5).
 - Baseline GPU performance and time profile on one NVIDIA A100 (`docs/performance.md`).

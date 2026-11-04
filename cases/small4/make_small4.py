@@ -4,11 +4,11 @@ make_small4.py: the small4 benchmark, 4 cilia in a periodic 1 x 1 x 1.5 box.
 The roots are a 2 x 2 sub-patch of one basal-body patch of the production layout (hexagonal
 cells of side 5 um, cilium length 6 um, a 3 x 3 patch covering 16% of the cell): spacing 0.2688
 and diagonal 0.380 in units of the cilium length. The cell beats at alpha ~ N(0, 25 deg), every
-cilium at beta = alpha (M.7: one beat direction per cell), and the square root lattice is centred
+cilium at beta = alpha (one beat direction per cell), and the square root lattice is centred
 in the box and turned by --lattice-angle (28 deg) from the beat, where in-phase neighbours stay
 furthest apart (0.126 > 2r = 0.1; at 0 deg they come within 0.035). A per-cilium spread
---beta-std of more than ~2 deg brings neighbours into contact, ~30 deg makes them cross (M.7).
-Pre-M.7 small4 (crossing cilia): --beta-std 25 --lattice-angle 0.
+--beta-std of more than ~2 deg brings neighbours into contact, ~30 deg makes them cross.
+Earlier small4 (crossing cilia): --beta-std 25 --lattice-angle 0.
 
     python3 make_small4.py --seed 1      -> coordinates_small4.txt, small4.box
 """

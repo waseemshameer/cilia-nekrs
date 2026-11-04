@@ -4,7 +4,13 @@
 *0.f*
 *.nek5000
 *.log
-*_[0-9]*.out
+*.out
+!reference.out
 cilia_force_history.bin
 __pycache__/
 *.pyc
+# Run folders written by the studies/ scripts
+studies/m2_*/
+studies/m8*_*/
+studies/m10_*/
+studies/rod_test/

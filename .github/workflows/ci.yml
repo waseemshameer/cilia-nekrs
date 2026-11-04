@@ -1,0 +1,23 @@
+# GPU-less checks only: a green run says nothing about answers. Those need the small4 gate on a GPU.
+name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the rules read commits and compare listed files across them
+      - name: Install MPI and numpy
+        run: sudo apt-get update && sudo apt-get install -y g++ openmpi-bin libopenmpi-dev python3-numpy
+      - name: Mock (16 checks)
+        run: tests/udf_mock/run_all.sh
+      - name: Gate self-test
+        run: python3 tests/test_gate.py
+      - name: Tests of the repo and release checks
+        run: python3 tests/test_checks.py
+      - name: Leak patterns, repo rules, gate line
+        run: python3 tools/check_repo.py

@@ -1,7 +1,6 @@
 """Speed-up figure: small4 wall time per beat cycle (a), tiled8 cilia-model time per corrector (b).
 
-All numbers are hard-coded from the project's own tables:
-ROADMAP compute budget / ROADMAP_done P2.1, P2.2.
+All numbers are hard-coded from the tables in docs/computational.md and docs/performance.md.
 Writes speedups.pdf + 600 dpi speedups.png next to this script.
 """
 from pathlib import Path
@@ -34,7 +33,7 @@ def panel_label(ax, txt, dx=0.0, dy=1.0):
 
 
 # ------------------------------------------------------------------- data
-# Source: ROADMAP compute budget / ROADMAP_done P2.1, P2.2.
+# Source: docs/computational.md, docs/performance.md.
 # (a) small4, one A100: s per beat cycle. Rows 1-11 solver tuning, rows 12-15 model corrections.
 ROWS_A = [
     ("v0.1 baseline: Navier–Stokes, $\\Delta t = 10^{-4}$, Jacobi PCG", 210, 0),
@@ -59,6 +58,8 @@ GROUP_LAB = ["solver tuning (v0.1 model)", "model corrections (v0.2)"]
 
 # (b) tiled8, one A100: ms per corrector.
 # components: force spreading, IQN update, self-flow + RFT, other
+# Totals are the "cilia model, total" row of docs/computational.md 5.3 divided by the correctors of each run;
+# "other" is what remains of the total. The v0.2 row swaps binned spreading for the all-pairs 359 ms.
 COMP_LAB = ["force spreading", "IQN update", "self-flow + RFT", "other"]
 COMP_COL = [BLUE, ORANGE, GREEN, GREY]
 ROWS_B = [

@@ -1,6 +1,6 @@
 """Figures for the nekRS cilia model document: beat, kernels, layout.
 
-Reads the Fulford & Blake coefficients from 3d.udf and the small4 coordinates;
+Reads the Fulford & Blake coefficients from cilia.udf and the small4 coordinates;
 writes PDF + 600 dpi PNG into ./figures/ next to this script.
 """
 import re
@@ -16,7 +16,7 @@ from scipy.integrate import quad
 from scipy.special import erfc
 
 HERE = Path(__file__).resolve().parent
-REPO = next(p for p in HERE.parents if (p / "3d.udf").exists())   # repo root (private: ../../.., public: ../..)
+REPO = next(p for p in HERE.parents if (p / "cilia.udf").exists())   # repo root
 OUT = HERE / "figures"
 OUT.mkdir(exist_ok=True)
 
@@ -46,7 +46,7 @@ def save(fig, name):
 
 
 # ---------------------------------------------------------------- beat data
-udf = (REPO / "3d.udf").read_text()
+udf = (REPO / "cilia.udf").read_text()
 
 
 def arr(name):
