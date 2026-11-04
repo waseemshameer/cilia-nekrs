@@ -3,6 +3,7 @@
 # (in Stokes with periodic sides those integrals are set by the total panel forces alone).
 #   python3 wall_fields.py extract <run dir> <out.npz> [tmin tmax]   (python 3.6 / numpy 1.19 ok)
 #   python3 wall_fields.py compare label=<npz> ...                    (first = the comparison baseline)
+# Needs checkpoints from your own runs: this repo ships none.
 # Per frame on the wall z = 0: tau_x = du/dz, tau_y = dv/dz (spectral derivative in the bottom element layer) and p:
 # plane mean, spatial rms of the deviation from it, max |deviation|, |tau| max, and Fourier modes |kx|, |ky| <= K
 # (box 1 x 1, units of 2 pi). Also the spatial rms of the time-mean field over the frames.

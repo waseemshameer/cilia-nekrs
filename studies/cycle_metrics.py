@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 # Cycle-2 (t in [1, 2]) mean, rms and peak of ubar, int p, int du/dz (z = 0) per run, from the udf 'vals'/'wall' lines.
 #   python3 cycle_metrics.py label=<run .out> ...   (first run = the comparison baseline)
+# Needs your own run logs: this repo ships none besides cases/small4/reference.out.
 import sys
 import numpy as np
+
+trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz   # np.trapz is gone from NumPy 2.0
 
 def read(f):
     d = {'vals': [], 'wall': []}
@@ -20,8 +23,8 @@ for arg in sys.argv[1:]:
     d = read(f); r = {}
     for name, tag, c in COLS:
         a = d[tag]; m = (a[:, 0] >= 1.0) & (a[:, 0] <= 2.0); t, y = a[m, 0], a[m, c]
-        mean = np.trapz(y, t) / (t[-1] - t[0])
-        r[name] = (mean, np.sqrt(np.trapz((y - mean)**2, t) / (t[-1] - t[0])), np.abs(y).max())
+        mean = trapz(y, t) / (t[-1] - t[0])
+        r[name] = (mean, np.sqrt(trapz((y - mean)**2, t) / (t[-1] - t[0])), np.abs(y).max())
     rows.append((lab, r))
 base = rows[0][1]
 print(f"{'run':10s}" + ''.join(f"{n+' mean':>16s}{'rms':>10s}{'peak':>10s}" for n, _, _ in COLS))

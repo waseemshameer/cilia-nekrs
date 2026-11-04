@@ -56,7 +56,7 @@ At the cilium scale the Reynolds number is $\mathrm{Re} = fL^2/\nu = 10^{-3}$, s
   \label{eq:stokes}
 \end{equation}
 with unit density.
-nekRS solves \eqref{eq:stokes} with \code{equation = stokes}, which drops only the advection term; the full Navier--Stokes equations remain available and give the same answer at this Reynolds number.
+nekRS solves \eqref{eq:stokes} with \code{equation = stokes}, which drops only the advection term; the full Navier--Stokes equations remain available, but they are not part of the gate and have not been re-checked with the current model.
 The cilia enter only through the body force $\vect f_b$.
 
 The domain is a box periodic in $x$ and $y$, with a no-slip wall at $z = 0$ (the epithelium) and a symmetry plane at the top (Fig.~\ref{fig:layout}b).

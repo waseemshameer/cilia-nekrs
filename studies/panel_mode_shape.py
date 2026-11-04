@@ -2,6 +2,7 @@
 """Shape of the growing mode of f = f* from the 'panel' lines (dumpPanelSteps > 0 in [CASEDATA]).
 
 Usage: panel_mode_shape.py <run .out> [more .out]
+Needs your own run logs: this repo ships none besides cases/small4/reference.out.
 
 Per call of userForcing it prints
   growth  rms(fa)_n / rms(fa)_{n-1} (fa = applied force sum_h c_h f_h, the force of the next solve)

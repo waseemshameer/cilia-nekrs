@@ -10,6 +10,7 @@ tag tt is the noise check (solver 1e-6, coupling 3e-6) on the base mesh.
     python3 make_resolution_study.py [tag ...]   -> m10_<tag>/{.box, .par, .usr, coordinates_small4.txt}
 
 The .re2 comes from genbox: echo m10_<tag>.box | genbox && mv box.re2 m10_<tag>.re2
+This only writes the case folders. The runs and their logs aren't in this repo, so run them yourself.
 """
 import sys
 from pathlib import Path

@@ -2,8 +2,11 @@
 # gate.py's metric (max |run - ref| / max |ref| over t in [1, 2], pointwise; |V|max on its cycle integral)
 # for many pairs at once, one row per pair.
 #   python3 gate_metric_compare.py <label>=<run .out>:<ref .out> ...
+# Needs your own run logs: this repo ships none besides cases/small4/reference.out.
 import sys
 import numpy as np
+
+trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz   # np.trapz is gone from NumPy 2.0
 
 COLS = [('ubar', 'vals', 1, True), ('Vmax', 'vals', 2, False), ('p.001', 'wall', 3, True), ('dudz.001', 'wall', 4, True),
         ('u.001', 'wall', 1, True), ('dvdz.001', 'wall', 5, True), ('p0', 'wall', 6, True), ('dudz0', 'wall', 7, True),
@@ -35,7 +38,7 @@ def compare(run, ref, T0=1.0, T1=2.0):
         tw = tr[(tr >= T0 - 1e-9) & (tr <= T1 + 1e-9)]
         r, y = yr[(tr >= T0 - 1e-9) & (tr <= T1 + 1e-9)], np.interp(tw, tc, yc)
         pk = np.abs(r).max()
-        res[name] = np.abs(y - r).max() / pk if pointwise else abs(np.trapz(y - r, tw)) / (pk * (tw[-1] - tw[0]))
+        res[name] = np.abs(y - r).max() / pk if pointwise else abs(trapz(y - r, tw)) / (pk * (tw[-1] - tw[0]))
     return res
 
 

@@ -1,4 +1,4 @@
-# Signal catalogue: nekRS v26.0.1 and cilia.udf log lines
+# Signal catalogue: nekRS v26.0 `96b3cf9e` and cilia.udf log lines
 
 Checked 2026-11-01 against logs of our own runs (all regexes below were run on them; counts in the last section) and the nekRS source (abbrev `N/`). Those logs are not in this repository.
 
@@ -31,7 +31,7 @@ Notes:
 | Linear solve (p, ux, uy, uz; or combined `U` with the block solver) | `^step=(\d+)\s+FLUID (p\|ux\|uy\|uz\|U)\s*: iter (\d+)\s+resNorm0 (F)\s+resNorm (F)\s*$` | `step=64       FLUID p             : iter 003  resNorm0 3.56e-01  resNorm 2.37e-04` | nrs.cpp:1065 (`"%03d"` iter, resNorm0 = initial residual after projection, resNorm = final) |
 | Projection (initial guess) | `^step=(\d+)\s+proj FLUID (\S+)\s*: resNorm0 (F)\s+resNorm (F)\s+ratio = (F)\s+(\d+)/(\d+)\s*$` | `step=273      proj FLUID ux       : resNorm0 1.13e+00  resNorm 9.59e-03  ratio = 1.178e+02  28/40` | nrs.cpp:1055; last two ints are vectors used / nVector |
 | Projection dropped a vector | `^solutionProjection fluid (pressure\|velocity): Discard new solution as it is linearly dependent!$` | `solutionProjection fluid pressure: Discard new solution as it is linearly dependent!` | printed by the elliptic projection code (not a nekRS error); 118 pressure + 6 velocity lines across our logs; seen in healthy runs too, so it is NOT a failure signal alone. Appears far more (every step) in the one diverging run. |
-| Unconverged marker | none exists | | nekRS v26 prints **no** "did not converge" text. `iter` equal to the maxIter (N/src/core/elliptic/elliptic.cpp:266 sets it) is the only sign, and maxIter is not in the log. Solver `iter` of the pressure at 10 to 20 and velocity at 265 to 286 (the diverging run, just before the blow-up) vs 1 to 5 normally is the practical warning. grep for "converge" in our logs finds nothing from nekRS. |
+| Unconverged marker | none exists | | nekRS v26.0 prints **no** "did not converge" text. `iter` equal to the maxIter (N/src/core/elliptic/elliptic.cpp:266 sets it) is the only sign, and maxIter is not in the log. Solver `iter` of the pressure at 10 to 20 and velocity at 265 to 286 (the diverging run, just before the blow-up) vs 1 to 5 normally is the practical warning. grep for "converge" in our logs finds nothing from nekRS. |
 
 Non-finite residual inside CG/GMRES aborts through `nekrsCheck` (section 4): `cg.hpp:84` "`<name> unreasonable initial residual norm!`", `cg.hpp:346, 440` "`<name> invalid resiual norm while running linear solver!`" (sic, typo is in the source), gmres.hpp:59, 467. Not seen in any real log (CFL guard fires first).
 
@@ -82,7 +82,7 @@ with errorcode 1.
 | MPI abort wrapper | `^MPI_ABORT was invoked on rank (\d+) in communicator (\S+)$` (Open MPI, hpcx 2.13.1) | seen in 2 real logs |
 | Exit code | `^finished with exit code (-?\d+)$` is **absent** on an abort (the exception path never reaches `finalize`, N/src/lib/nekrs.cpp:699); present with `0` on success. Missing line + `step=` lines stopped = abnormal end. | a normal run ends with it; the diverging run does not |
 
-NaN/Inf: there is no dedicated NaN printf in v26. A NaN in the flow shows up as `CFL= nan` (printf `%.3f` of NaN gives `nan` or `-nan`) just before the abort, and in `divUErr`. In the udf, NaN would appear as `nan`/`-nan` in `vals`/`wall`/`iqn`. Regex for any: `(?i)(?<![A-Za-z])-?(nan|inf)(?![A-Za-z])` applied only to lines that do NOT start with `<<<` (the `.par`/udf echo contains the words "inf" in comments, e.g. "f_c = inf"). No real NaN line in any log (the CFL guard aborts at `> 100` first), so the exact NaN printf text is from the C library, unverified.
+NaN/Inf: there is no dedicated NaN printf in v26.0. A NaN in the flow shows up as `CFL= nan` (printf `%.3f` of NaN gives `nan` or `-nan`) just before the abort, and in `divUErr`. In the udf, NaN would appear as `nan`/`-nan` in `vals`/`wall`/`iqn`. Regex for any: `(?i)(?<![A-Za-z])-?(nan|inf)(?![A-Za-z])` applied only to lines that do NOT start with `<<<` (the `.par`/udf echo contains the words "inf" in comments, e.g. "f_c = inf"). No real NaN line in any log (the CFL guard aborts at `> 100` first), so the exact NaN printf text is from the C library, unverified.
 
 ### UDF_Setup / build failures
 

@@ -1,5 +1,6 @@
 """
 make_rod_test.py: the straight-rod drag test behind the rod table in docs/model (section Verification).
+This only writes the case folders. The runs and their logs aren't in this repo, so run them yourself.
 
 One straight rigid rod (kinematics = rod in cilia.udf), far from the walls. This script records the
 settings of those 10 runs and is frozen: it carries them itself, so later changes to small4.par don't

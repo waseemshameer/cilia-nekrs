@@ -1,6 +1,7 @@
 # Offline checks of the cilia model (no nekRS): Fulford-Blake length, panel heights, Gaussian
 # truncation and wall loss, relaxation filter. Run: python3 kinematics_checks.py
 import numpy as np
+trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz   # np.trapz is gone from NumPy 2.0
 from scipy.special import erf, erfc
 A1=np.array([-0.449,-0.072,0.658, 0.130,-1.502,0.793, -0.169,0.260,-0.251, 0.063,-0.123,0.049, -0.050,0.011,0.009, -0.040,-0.009,0.023, -0.068,0.196,-0.111]).reshape(7,3)
 A2=np.array([2.076,-1.074,0.381, -0.003,-0.230,0.331, 0.054,-0.305,0.193, 0.007,-0.180,0.082, 0.026,-0.069,0.029, 0.022,0.001,0.002, 0.010,-0.080,0.048]).reshape(7,3)
@@ -19,7 +20,7 @@ def xi(s,t,d=False):
     return x1,x2
 t=np.linspace(0,1,2001)[:,None]; s=np.linspace(0,1,401)[None,:]
 d1,d2=xi(s,t,True); stretch=np.hypot(d1,d2)
-Lt=np.trapz(stretch,s[0],axis=1)
+Lt=trapz(stretch,s[0],axis=1)
 print("1) FB length over cycle: min %.3f max %.3f mean %.3f ; local |dx/ds| min %.3f max %.3f"%(Lt.min(),Lt.max(),Lt.mean(),stretch.min(),stretch.max()))
 Np=20; sp=(np.arange(Np)+0.5)/Np
 x1,x2=xi(sp[None,:],t)

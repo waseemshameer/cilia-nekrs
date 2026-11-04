@@ -17,6 +17,8 @@
 import argparse, os, re, sys
 import numpy as np
 
+trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz   # np.trapz is gone from NumPy 2.0
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 p = argparse.ArgumentParser()
 p.add_argument('run')
@@ -76,8 +78,8 @@ for name, tag, c, pointwise in METRICS:
     pk = np.abs(r).max()
     d = y - r
     md = np.abs(d).max() / pk
-    l2 = np.sqrt(np.trapz(d**2, tw) / (tw[-1] - tw[0])) / pk               # cycle-rms diff / peak
-    ri = np.trapz(d, tw) / (pk * (tw[-1] - tw[0]))                          # cycle-mean diff / peak
+    l2 = np.sqrt(trapz(d**2, tw) / (tw[-1] - tw[0])) / pk               # cycle-rms diff / peak
+    ri = trapz(d, tw) / (pk * (tw[-1] - tw[0]))                          # cycle-mean diff / peak
     if pointwise:
         res = 'PASS' if l2 <= a.tol_l2 and md <= a.tol_max else 'FAIL'
     else:

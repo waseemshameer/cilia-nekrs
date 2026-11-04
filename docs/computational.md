@@ -2,7 +2,9 @@
 
 This document explains how one time step is computed, what we changed to make it faster, and what each change bought. The model itself (equations, kernels, coupling) is in [model.pdf](model.pdf); the current numbers in short are in [performance.md](performance.md).
 
-All timings are wall time on one NVIDIA A100 with one MPI rank, nekRS v26.0.1, polynomial order N = 5. Runs were on different A100 nodes of the same cluster, which differ by a few percent; where a comparison needed better than that, both runs were on the same node.
+All timings are wall time on one NVIDIA A100 with one MPI rank, nekRS v26.0 `96b3cf9e`, polynomial order N = 5, and they stop at v0.3, which ran N_p = 20; production has since moved to N_p = 40. Runs were on different A100 nodes of the same cluster, which differ by a few percent; where a comparison needed better than that, both runs were on the same node.
+
+Kernels stay in OCCA, which is vendor-neutral, though only the A100 has been run so far. Work goes in the udf and the par first. nekRS patches come only when profiling shows nekRS is the bottleneck.
 
 <p align="center"><img src="figures/speedups.png" width="900" alt="Wall time per beat cycle on small4 after each change, and the cilia-model time per fluid solve on tiled8 after each change"></p>
 
@@ -27,7 +29,7 @@ The fluid solve is most of the cost when the number of cilia is small. As the nu
 - **`small4`:** 4 cilia, 1,200 elements, 1 × 1 × 1.5 box. Small enough to run two beat cycles in about a minute; used for every solver change and as the regression gate.
 - **`tiled2`, `tiled4`, `tiled8`:** the `small4` cell repeated k × k times (`cases/make_tiled.py`): 16, 64 and 256 cilia; 4,800, 19,200 and 76,800 elements. Used to measure how the cilia cost grows. `tiled2` reproduces `small4` per unit area (gate passes with `gate.py --per-area 4`), so the tiling is the same flow.
 
-**Every change had to keep the answer.** `gate.py` compares mean flow, maximum velocity and wall integrals over the second beat cycle with a tight reference run; a change passes if every quantity stays within 0.1% of its peak. New GPU code paths also have built-in checks that run the old path side by side for the first calls and print the difference (`binningCheck`, `iqnCheck`); they agree to round-off (≤ 1e-15 for forces, ≤ 1e-12 for the IQN update).
+**Every change had to keep the answer.** `gate.py` compares mean flow, maximum velocity and wall integrals over the second beat cycle with a tight reference run; up to v0.3 a change passed if every quantity stayed within 0.1% of its peak. The current rule is in [running.md](running.md#regression-gate). New GPU code paths also have built-in checks that run the old path side by side for the first calls and print the difference (`binningCheck`, `iqnCheck`); they agree to round-off (≤ 1e-15 for forces, ≤ 1e-12 for the IQN update).
 
 **Profiling.** `profileCilia = 1` (in `[CASEDATA]`) puts a device-synchronised timer around every part of the cilia model and prints them with nekRS's timer report. Off, it adds no synchronisation.
 
@@ -43,7 +45,7 @@ The first profile of `small4` (Navier–Stokes, dt = 1e-4, default solvers) foun
 | Stokes mode (no advection) | the same cost per step, but no CFL limit on dt | 131 | 1.00× |
 | dt = 2e-3, BDF2, Crank–Nicolson force relaxation | 20× fewer steps. The force filter's Euler update was a first-order dt error; Crank–Nicolson made the dt error second order, so a large step passes the gate | 23.6 | 5.6× |
 | Velocity projection with 160 vectors | with 5 vectors the space kept filling and resetting at large dt; 218 → 78 iterations | 14.1 | 1.67× |
-| Slip top boundary as an aligned `zeroDirichletZ` face, and velocity p-multigrid | p-multigrid needs the aligned face, which exposed a nekRS v26 bug (averaged normals left empty on aligned slip faces, so the pressure boundary term blew up); `fixAlignedAvgNormals()` in the udf works around it | 11.4 | 1.24× |
+| Slip top boundary as an aligned `zeroDirichletZ` face, and velocity p-multigrid | p-multigrid needs the aligned face, which exposed a nekRS v26.0 bug, [#722](https://github.com/Nek5000/nekRS/issues/722) (averaged normals left empty on aligned slip faces, so the pressure boundary term blew up); `fixAlignedAvgNormals()` in the udf works around it | 11.4 | 1.24× |
 | Velocity tolerance 1e-4 → 3e-3 | the gate quantities do not change | 9.2 | 1.25× |
 | Velocity p-multigrid Chebyshev degree 2 | about 1.6 iterations left per component | 8.25 | 1.11× |
 | Velocity projection back to 40 vectors | with a better preconditioner the large space costs more than it saves | 7.50 | 1.10× |
@@ -155,5 +157,5 @@ On `small4` (4 cilia) none of this shows: it runs at about 30 s per cycle, as in
 ## 6. What is left
 
 - **Per-step host work:** panel kinematics and binning are still built on the host and uploaded once per step, and the body-force field is reset from a saved copy every corrector. Together about 8% of the remaining cilia time on `tiled8` (0.2% of the step).
-- **Multiple GPUs:** today every rank holds every panel. Next, each rank keeps only the cilia whose kernels reach its elements (plus a halo), then strong and weak scaling on tiled cases.
+- **Multiple GPUs:** in v0.3 every rank holds every panel. On `main` each rank keeps only its own cilia plus a halo of those whose kernels reach its elements. Scaling work: [scaling.md](scaling.md).
 - **Coupling:** the corrector count (2.3 on `small4`, 4.6 on `tiled8`) multiplies the fluid cost, and the IQN settings still cap an occasional step on `tiled8` in some runs.

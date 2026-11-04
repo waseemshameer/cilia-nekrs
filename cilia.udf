@@ -69,7 +69,7 @@ int    couplingRestart = 0;       // > 0: a step that reaches this many correcto
                                   // pairs and goes on with its own, which are kept ('iqnrestart' line); 0 = off
 dfloat couplingFilter = 1e-3;     // QR filter: drop a secant column whose orthogonal part is < filter * its norm
 bool   couplingIQN = false;
-double tilePeriod = 0;           // P2: > 0 prints 'tileasym' lines: |F - F shifted by one tile| / |F| in x and y (tiled cases, tile = 1)
+double tilePeriod = 0;           // > 0 prints 'tileasym' lines: |F - F shifted by one tile| / |F| in x and y (tiled cases, tile = 1)
 int    iqnVerbose = 0;            // 1 prints the residual of every corrector ('iqnres' lines: time, corrector, |f* - F|/|f*|)
 // spatial binning of the force spreading. Panels are sorted into a uniform x-y-z grid of bins (width
 // ~binWidth r_cut, periodic in x and y) once per panel position; each element visits only the bins within r_cut of
@@ -1929,7 +1929,7 @@ double iqnTime = 0;
 dfloat iqnR = 0;
 long iqnItersSum = 0, iqnSteps = 0, iqnMaxed = 0, iqnRestarts = 0;
 
-// P2 diagnostic: how far the panel forces are from tile-periodic. partner[d][k] is the cilium whose root is
+// Diagnostic: how far the panel forces are from tile-periodic. partner[d][k] is the cilium whose root is
 // cilium k's root shifted by one tile in x (d = 0) or y (d = 1), wrapped into the box; -1 if none
 std::vector<int> tilePartner[2];
 void tileAsymmetry(double time, const std::vector<dfloat> &F) {   // F: all panels, on rank 0 (empty elsewhere)
@@ -2409,7 +2409,7 @@ void printDiagnostics(double time) {
   }
 }
 
-// Workaround for a nekRS v26 bug: divergenceSurfaceHex3D (pressure rhs) reads the averaged normal
+// Workaround for a nekRS v26.0 bug, https://github.com/Nek5000/nekRS/issues/722: divergenceSurfaceHex3D (pressure rhs) reads the averaged normal
 // (sgeo slots NXAVGID..NZAVGID = 15..17, mesh3D.h) on zeroDirichletX/Y/Z faces too, but only setAvgNormal
 // writes those slots, and it runs only for unaligned (zeroDirichletN) faces. On aligned faces they hold
 // uninitialized device memory, so copy the face normal (slots NXID..NZID = 0..2) there. Static mesh only.

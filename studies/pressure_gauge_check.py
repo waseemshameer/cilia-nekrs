@@ -5,6 +5,7 @@
 # node layout in z. Model: force spread uniformly over z < zt. Compare the predicted int p ratio between meshes with the
 # observed one (fit d = k p_ref over cycle 2), then print what is left of int p once k is removed.
 #   python3 pressure_gauge_check.py <dir holding m10_<tag>.out>
+# Needs your own run logs: this repo ships none besides cases/small4/reference.out. Those come from make_resolution_study.py.
 import sys, os
 import numpy as np
 from numpy.polynomial import legendre as L

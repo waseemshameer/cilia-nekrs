@@ -1,45 +1,73 @@
 # cilia-nekrs
 
-GPU simulation of flow driven by beating cilia, in [nekRS](https://github.com/Nek5000/nekRS) (v26).
+GPU simulation of cilia-driven flow in [nekRS](https://github.com/Nek5000/nekRS): actuator-filament model, benchmark case, regression gate.
+
+[![CI](https://github.com/waseemshameer/cilia-nekrs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/waseemshameer/cilia-nekrs/actions/workflows/ci.yml)
 
 <p align="center"><img src="docs/model/figures/beat.png" width="720" alt="Fulford-Blake beat: centreline shapes over one cycle and the arclength of the cilium"></p>
 
-Each cilium is an actuator filament: a chain of panels that follows a prescribed beat (Fulford & Blake 1986). The panels sample the fluid velocity, resistive-force theory turns the slip into a force, and that force goes back into the fluid as a regularised body force. Each filament's own flow is removed from the sampled velocity, and forces and flow are coupled implicitly within every time step by interface quasi-Newton iterations. The model lives in one udf (`cilia.udf`); the force spreading is an OCCA kernel, so the same code runs on NVIDIA, AMD and Intel GPUs.
+Each cilium is an actuator filament: a chain of panels that follows a prescribed beat (Fulford & Blake 1986), samples the fluid velocity, and returns a resistive-force-theory drag to the fluid as a regularised body force. Forces and flow are coupled implicitly within every time step by interface quasi-Newton iterations, as written up in [docs/model.pdf](docs/model.pdf). The model lives in one udf (`cilia.udf`) with OCCA kernels, so it isn't tied to one GPU vendor, though only the NVIDIA A100 has been run so far.
 
-**The model is written up in [docs/model.pdf](docs/model.pdf)** (equations, kernels, coupling, the benchmark case and its verification).
+## Status
 
-The current focus is GPU performance and scaling toward very large numbers of cilia. v0.2 tuned the solvers (≈ 29× faster on the v0.1 model) and corrected the cilia model; v0.3 moves the cilia model onto the GPU so its cost grows linearly with the number of cilia (2.8% of the step at 256 cilia). **How each speed-up was made and what it bought: [docs/computational.md](docs/computational.md).**
+**Status.** Pre-1.0, developed by one person. `main` can be ahead of the latest release, so use a tag for results. **Known limit:** the mean pumping ū is converged in the kernel width ε (within 0.25% at ε = 0.1 vs ε = 0.035), but the mean wall shear is not: on `small4` it's 26% lower, and it converges only at first order in ε. Local wall stresses keep growing as ε falls, so don't quote wall-shear values as converged.
 
 ## Quick start
 
-You need a working nekRS v26 install (`nrsmpi` on your `PATH`), Python 3 with NumPy.
+You need nekRS v26.0 `96b3cf9e` built and on your `PATH` (`nrsmpi`; the commit is pinned in `NEKRS_VERSION`, and the gate fails on any other), and Python 3 with NumPy.
 
 ```bash
 git clone https://github.com/waseemshameer/cilia-nekrs.git
 cd cilia-nekrs/cases/small4
-nrsmpi small4 1 | tee small4.log          # or: sbatch ../../job_template.sh small4
+nrsmpi small4 1 | tee small4.log          # or: sbatch ../../job_template.sh small4 (log: small4.out)
 ```
 
 The first run JIT-compiles the kernels (several minutes); later runs reuse the cache. `small4.par` stops at t = 0.1. To check a change against the reference, set `endTime = 2.0` (two beat cycles, about a minute on one A100) and run
 
 ```bash
-python3 ../../gate.py small4.log          # PASS if every quantity is within limits over cycle 2 (docs/running.md)
+python3 ../../gate.py small4.log          # PASS if every quantity is within limits over cycle 2
 ```
+
+More in [docs/running.md](docs/running.md).
+
+## Measured speed
+
+v0.3, one NVIDIA A100, N_p = 20:
+
+- `small4` (4 cilia, 1,200 elements): about 30 s per beat cycle
+- `tiled8` (256 cilia, 76,800 elements): about 1,640 s per beat cycle, with the cilia model at 2.8% of the step
+
+Details: [performance](docs/performance.md), [how the speed was reached](docs/computational.md), [scaling setup and evidence](docs/scaling.md). What's next: [open Issues](https://github.com/waseemshameer/cilia-nekrs/issues).
+
+## How results are checked
+
+`gate.py` compares the second beat cycle of a `small4` run with `cases/small4/reference.out`. Every quantity must stay within a cycle L2 of 2e-4 and a maximum of 2e-3 of its peak ([the rule and its evidence](docs/running.md#regression-gate)). The reference has only been run on an NVIDIA A100, so whether it passes on other hardware is unmeasured.
+
+The CI badge only means the GPU-less checks passed. It says nothing about answers, which need the gate on a GPU.
 
 ## Contents
 
 | Path | What |
 |---|---|
 | `cilia.udf` | The cilia model: beat kinematics, RFT drag, self-flow removal, spreading kernel, IQN coupling, diagnostics |
-| `cases/small4/` | Benchmark: 4 cilia in a periodic 1 × 1 × 1.5 box, 1,200 elements, N = 5 |
+| `cases/small4/` | Benchmark: 4 cilia in a periodic 1 × 1 × 1.5 box, 1,200 elements, N = 5, with the gate's reference |
 | `cases/tiled{2,4,8}/`, `cases/make_tiled.py` | `small4` tiled k × k: 16, 64, 256 cilia, for profiling at scale |
-| `gate.py` | Regression gate against the `small4` reference run (`cases/small4/reference.out`) |
-| `job_template.sh` | Generic Slurm script; adapt it to your cluster |
+| `gate.py`, `NEKRS_VERSION` | Regression gate against the `small4` reference; the nekRS commit it requires |
+| `job_template.sh` | Example Slurm script; adapt it to your cluster. It has only run on one cluster |
 | `studies/` | Finished one-off analyses behind model choices; most need your own run logs |
-| `tests/udf_mock/` | Builds the udf without nekRS or a GPU and checks the distributed cilia path |
-| `tools/` | Log tools: `log-triage/`, `scaling_timing.py` |
-| `docs/` | [The model (PDF)](docs/model.pdf), [running](docs/running.md), [the case](docs/case.md), [performance](docs/performance.md), [computational work and speed-ups](docs/computational.md) |
+| `tests/` | The udf built without nekRS or a GPU (`udf_mock/`), and tests of the gate and repo checks |
+| `tools/` | `log-triage/`, `scaling_timing.py`, repo and release checks |
+| `docs/` | [Model (PDF)](docs/model.pdf), [running](docs/running.md), [the case](docs/case.md), [performance](docs/performance.md), [computational work](docs/computational.md), [scaling](docs/scaling.md), [releasing](docs/releasing.md), [decisions](docs/adr/), [log signals](docs/nekrs-log-signals.md) |
 
-## Citing and acknowledgements
+`docs/model.pdf` is rebuilt only when a release changes it, so until the next release it still shows v0.2's N_p = 20. `docs/model/model.tex` is current.
 
-See `CITATION.cff`. Released under the MIT license. The lab, colleagues and computing resources behind this work are acknowledged in [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
+## How this code is written
+
+**How this code is written.** This code is developed with Claude Code, Anthropic's AI coding tool. Claude writes most of the code and docs, and drafts the commit messages, Issues and pull requests. Commits it helped with carry a `Co-Authored-By` line. I make the design and physics decisions and approve each commit. A change that can affect results must pass the `small4` gate before it merges. I am responsible for all of it, including any errors.
+
+## Contributing, citing, licence
+
+- **Contributing:** see [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Citing:** see [CITATION.cff](CITATION.cff), and name the tag you used. A DOI starts with v0.4.0.
+- **Licence:** MIT, see [LICENSE](LICENSE).
+- **Acknowledgements:** the lab, colleagues and computing resources behind this work are in [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).

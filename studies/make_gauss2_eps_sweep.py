@@ -7,6 +7,7 @@ N_p and par as the make_eps_sweep.py sweep, so the gauss runs of that sweep (sma
 
 Families: "" = cases/small4 (contact-free), s = one cilium at the box centre, beta 0.
 The .re2 comes from genbox: echo <name>.box | genbox > genbox.log && mv box.re2 <name>.re2
+This only writes the case folders. The runs and their logs aren't in this repo, so run them yourself.
 """
 from pathlib import Path
 from make_eps_sweep import BOX, RUNS, SMALL4, sub1

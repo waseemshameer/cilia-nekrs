@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 # Cycle-2 metrics (t in [1, 2]) of eps-sweep runs from their 'vals'/'wall' lines, relative to a baseline run.
 #   python3 eps_sweep_compare.py base=<run .out> label=<run .out> ...
+# Needs your own run logs: this repo ships none besides cases/small4/reference.out.
 # ubar mean, int p rms (z = 0), int du/dz mean (z = 0: the mean net x force in Stokes), int du/dz rms.
 # Means use the samples' trapezoid in time (runs at equal dt only).
 import sys
 import numpy as np
+
+trapz = np.trapezoid if hasattr(np, "trapezoid") else np.trapz   # np.trapz is gone from NumPy 2.0
 
 def load(f):
     v, w = [], []
@@ -14,7 +17,7 @@ def load(f):
         elif len(s) == 10 and s[-1] == 'wall': w.append([float(x) for x in s[:9]])
     v, w = np.array(v), np.array(w)
     v = v[(v[:, 0] >= 1 - 1e-9) & (v[:, 0] <= 2 + 1e-9)]; w = w[(w[:, 0] >= 1 - 1e-9) & (w[:, 0] <= 2 + 1e-9)]
-    mean = lambda t, y: np.trapz(y, t) / (t[-1] - t[0])
+    mean = lambda t, y: trapz(y, t) / (t[-1] - t[0])
     rms = lambda t, y: np.sqrt(mean(t, (y - mean(t, y))**2))
     return dict(ubar=mean(v[:, 0], v[:, 1]), prms=rms(w[:, 0], w[:, 6]), tx=mean(w[:, 0], w[:, 7]), txrms=rms(w[:, 0], w[:, 7]),
                 tend=v[-1, 0])

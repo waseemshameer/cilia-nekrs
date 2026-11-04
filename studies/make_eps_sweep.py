@@ -8,6 +8,7 @@ N_p 20), plus three controls at one change each.
     python3 make_eps_sweep.py        -> m2_<tag>/{m2_<tag>.box, .par, .usr, coordinates_small4.txt}
 
 The .re2 comes from genbox: echo <name>.box | genbox > genbox.log && mv box.re2 <name>.re2
+This only writes the case folders. The runs and their logs aren't in this repo, so run them yourself.
 """
 import re
 from pathlib import Path
