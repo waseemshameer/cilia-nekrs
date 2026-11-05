@@ -5,6 +5,7 @@
 #include <vector>
 #include <cmath>
 #include <algorithm>
+#include <limits>
 #include <mpi.h>
 #include "udf.hpp"
 
@@ -1112,7 +1113,8 @@ void setupBins() {
   std::vector<int> eb(mesh->Nelements * 6);
   long visited = 0;
   for (dlong e = 0; e < mesh->Nelements; e++) {
-    dfloat lo[3] = {1e300, 1e300, 1e300}, hi[3] = {-1e300, -1e300, -1e300};
+    const dfloat big = std::numeric_limits<dfloat>::max();
+    dfloat lo[3] = {big, big, big}, hi[3] = {-big, -big, -big};
     for (int n = 0; n < mesh->Np; n++) {
       const dlong id = e * mesh->Np + n;
       const dfloat p[3] = {X[id], Y[id], Z[id]};
@@ -2327,7 +2329,7 @@ void setupPlaneWeights(dfloat z0, occa::memory &o_W, occa::memory &o_WDz, dfloat
   auto [x, y, z] = mesh->xyzHost();
   std::vector<dfloat> W(mesh->Nlocal, 0.0), WDz(mesh->Nlocal, 0.0);
   std::vector<dfloat> l(Nq), dl(Nq);
-  const dfloat tol = 1e-8;
+  const dfloat tol = sizeof(dfloat) == sizeof(float) ? 1e-6 : 1e-8;  // float rounding of the check below reaches ~1e-7
   double a = 0;
   for (dlong e = 0; e < mesh->Nelements; ++e) {
     const dlong o = e * mesh->Np;
