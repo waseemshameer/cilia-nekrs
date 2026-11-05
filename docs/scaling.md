@@ -43,8 +43,7 @@ So n0.8 lies between 2.4M and 4.8M on up to 4 GPUs, and it isn't named yet. Load
 In this order, because each one changes the balance between compute and communication.
 
 1. **GPU-aware MPI**, as above ([#3](https://github.com/waseemshameer/cilia-nekrs/issues/3)).
-2. **Whole-solver FP32:** the separate `nekrs-fp32` binary (`CMakeLists.txt:155`, Discussion [#626](https://github.com/Nek5000/nekRS/discussions/626)). The gate decides ([#4](https://github.com/waseemshameer/cilia-nekrs/issues/4)).
-3. **Velocity solver on 4 GPUs:** `pcg` + Jacobi, and 20 projection vectors. Any winner must also pass the gate on `small4` ([#5](https://github.com/waseemshameer/cilia-nekrs/issues/5)).
+2. **Velocity solver on 4 GPUs:** `pcg` + Jacobi, and 20 projection vectors. Any winner must also pass the gate on `small4` ([#5](https://github.com/waseemshameer/cilia-nekrs/issues/5)).
 
 ## Advice we checked and didn't adopt
 
@@ -57,6 +56,7 @@ In this order, because each one changes the balance between compute and communic
 | "Coarse-grid allreduce dominates" | The coarse grid is 2.4% of our 4-GPU solve. This rejects the coarse-grid claim only: allreduce in PCG and projection is unmeasured |
 | BoomerAMG on the device | The same 2.4%. Reopens only if the coarse grid passes 10% of the solve at scale, because below that even an instant coarse solve saves under 10% |
 | Tolerances 1e-6 (pressure) and 1e-8 (velocity) | The gate passes at 3e-3, and they're tighter than the developers' own 1e-4 and 1e-6 (Min25 Sec 2) |
+| Whole-solver FP32, the `nekrs-fp32` binary (`CMakeLists.txt:155`, Discussion [#626](https://github.com/Nek5000/nekRS/discussions/626)) | It passes the gate on `small4`, but gains little: 7% with `solver = gmres+flexible+nvector=15` in `[FLUID PRESSURE]`, one run each, because the preconditioner is already float. Its default pressure solver, with iterative refinement, is 9% slower. Float kinematics error grows with t unless t is wrapped into one period. It uses 47% less device memory, but FP64 needs only about 26 GB per GPU at 38,400 elements, on an 80 GB A100. Reopens if the 80% load nears GPU memory ([#4](https://github.com/waseemshameer/cilia-nekrs/issues/4)) |
 | Explicit `pMGSchedule`, `[SCALAR01]`, ALE vs immersed boundary | The default schedule is fine, there's no scalar, and the case is already Eulerian |
 
 ## Sources
