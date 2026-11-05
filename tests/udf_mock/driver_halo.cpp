@@ -110,8 +110,8 @@ int main(int argc, char **argv) {
             const dfloat lo[3] = {X0 + ix * hx, Y0 + iy * hy, iz * hz};
             dfloat cx = px[mm] - (lo[0] + 0.5 * hx); cx -= Lx * std::floor(cx / Lx + 0.5);
             dfloat cy = py[mm] - (lo[1] + 0.5 * hy); cy -= Ly * std::floor(cy / Ly + 0.5);
-            const dfloat dx = std::max((dfloat)0, std::abs(cx) - 0.5 * hx);
-            const dfloat dy = std::max((dfloat)0, std::abs(cy) - 0.5 * hy);
+            const dfloat dx = std::max((dfloat)0, (dfloat)(std::abs(cx) - 0.5 * hx));
+            const dfloat dy = std::max((dfloat)0, (dfloat)(std::abs(cy) - 0.5 * hy));
             const dfloat dz = std::max((dfloat)0, std::max(lo[2] - pz[mm], pz[mm] - lo[2] - hz));
             const dfloat d2 = dx * dx + dy * dy + dz * dz;
             if (d2 < rcut2) { need = true; dmin = sqrt(d2); }

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Builds the udf against the mock and runs the 16 GPU-less checks. Every run has a timeout, because one class of bug
+# Builds the udf against the mock and runs the 19 GPU-less checks. Every run has a timeout, because one class of bug
 # (IQN dot products not reduced across ranks) hangs instead of failing. All checks run even after a failure.
 #   tests/udf_mock/run_all.sh                 uses cilia.udf at the repo root
-#   UDF=<file> MOCK_TIMEOUT=<s> run_all.sh    another udf, or another limit per run (default 60 s; all 16 take about 14 s)
+#   UDF=<file> MOCK_TIMEOUT=<s> run_all.sh    another udf, or another limit per run (default 60 s; all 19 take about 25 s)
 set -u
 cd "$(dirname "$(readlink -f "$0")")"
 UDF=$(readlink -f "${UDF:-../../cilia.udf}")
@@ -32,6 +32,11 @@ for d in halo kin dist; do
         || { echo "FAIL     build driver_$d.cpp"; exit 1; }
 done
 
+# FP32 (nekrs-fp32) has to keep building. Compile only: the drivers' 1e-12 and 1e-13 limits are double round-off.
+for d in halo kin dist; do
+    check "float build, driver_$d" mpicxx -std=c++17 -O0 -DNEKRS_USE_DFLOAT_FLOAT -I. -include "$WORK/new_udf.cpp" "driver_$d.cpp" -o "$WORK/f_$d"
+done
+
 COORDS="../../cases/tiled4/coordinates_tiled4.txt -2 2 -2 2 40 40 12"
 for n in 1 2 3 4; do check "halo block, $n ranks" $(ranks $n) "$WORK/t_halo" $COORDS block 100; done
 check "halo slab, 4 ranks" $(ranks 4) "$WORK/t_halo" $COORDS slab 100
@@ -45,4 +50,4 @@ done
 for n in 2 3 4; do check "F 1 vs $n ranks" python3 cmp.py "$WORK/F1.bin" "$WORK/F$n.bin" 540; done
 
 echo "$((total - failed)) of $total checks passed"
-[ "$failed" -eq 0 ] && [ "$total" -eq 16 ]
+[ "$failed" -eq 0 ] && [ "$total" -eq 19 ]

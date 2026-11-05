@@ -108,7 +108,7 @@ int main(int argc, char **argv) {
   }
   long tot[3] = {diffs, lost, binned}, sum[3];
   MPI_Allreduce(tot, sum, 3, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
-  MPI_Allreduce(MPI_IN_PLACE, worst, 4, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+  MPI_Allreduce(MPI_IN_PLACE, worst, 4, MPI_DFLOAT, MPI_MAX, MPI_COMM_WORLD);
   const bool ok = sum[0] == 0 && sum[1] == 0 && sum[2] == (long)checks * R && worst[0] < 1e-13 && worst[1] < 1e-13 &&
                   worst[2] < 1e-13 && worst[3] < 1e-13;
   if (rank == 0)
