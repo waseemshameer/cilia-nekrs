@@ -7,11 +7,18 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
+#include <limits>
 #include <tuple>
 #include <mpi.h>
+// -DNEKRS_USE_DFLOAT_FLOAT builds the udf as nekrs-fp32 does; the same macro switches dfloat in nekRS's nekrsSys.hpp
+#ifdef NEKRS_USE_DFLOAT_FLOAT
+typedef float dfloat;
+#define MPI_DFLOAT MPI_FLOAT
+#else
 typedef double dfloat;
-typedef int dlong;
 #define MPI_DFLOAT MPI_DOUBLE
+#endif
+typedef int dlong;
 #define p_Nq 2
 #define p_Np 8
 using std::min; using std::max;
@@ -41,26 +48,26 @@ struct memory {
 struct Device {
   template <class T> occa::memory malloc(size_t n) {
     occa::memory m; m.esz = sizeof(T); m.cnt = n; m.buf = std::make_shared<std::vector<char>>(n * sizeof(T));
-    // poison like uninitialised device memory
-    double nan = std::nan(""); for (size_t i = 0; i + sizeof(double) <= n * sizeof(T); i += sizeof(double)) memcpy(m.buf->data() + i, &nan, 8);
+    // poison like uninitialised device memory: all-ones bytes are a NaN in both float and double
+    memset(m.buf->data(), 0xFF, n * sizeof(T));
     return m;
   }
   occa::memory malloc(size_t bytes) { return malloc<char>(bytes); }
   void finish() {}
 };
 struct LinAlg {
-  void fill(long n, double v, occa::memory &o) { double *p = o; for (long i = 0; i < n; i++) p[i] = v; }
-  double min(long n, occa::memory &o, MPI_Comm c) { double *p = o, m = 1e300; for (long i = 0; i < n; i++) m = std::min(m, p[i]);
-    MPI_Allreduce(MPI_IN_PLACE, &m, 1, MPI_DOUBLE, MPI_MIN, c); return m; }
-  double max(long n, occa::memory &o, MPI_Comm c) { double *p = o, m = -1e300; for (long i = 0; i < n; i++) m = std::max(m, p[i]);
-    MPI_Allreduce(MPI_IN_PLACE, &m, 1, MPI_DOUBLE, MPI_MAX, c); return m; }
+  void fill(long n, double v, occa::memory &o) { dfloat *p = o; for (long i = 0; i < n; i++) p[i] = v; }
+  dfloat min(long n, occa::memory &o, MPI_Comm c) { dfloat *p = o, m = std::numeric_limits<dfloat>::max(); for (long i = 0; i < n; i++) m = std::min(m, p[i]);
+    MPI_Allreduce(MPI_IN_PLACE, &m, 1, MPI_DFLOAT, MPI_MIN, c); return m; }
+  dfloat max(long n, occa::memory &o, MPI_Comm c) { dfloat *p = o, m = -std::numeric_limits<dfloat>::max(); for (long i = 0; i < n; i++) m = std::max(m, p[i]);
+    MPI_Allreduce(MPI_IN_PLACE, &m, 1, MPI_DFLOAT, MPI_MAX, c); return m; }
   double maxAbsoluteError(long, int, long, double, occa::memory &, occa::memory &, MPI_Comm) { return 0; }
   double amaxMany(long, int, long, occa::memory &, MPI_Comm) { return 0; }
 };
 struct Comm { MPI_Comm mpiComm() { return MPI_COMM_WORLD; } int mpiRank() { int r; MPI_Comm_rank(MPI_COMM_WORLD, &r); return r; } };
 struct Timer { void tic(const std::string &) {} void toc(const std::string &) {} void addUserStat(const std::string &) {} };
 struct Par { template <class T> void extract(const char *, const char *, T &) {} };
-struct Options { std::string getArgs(const char *) { return ""; } void getArgs(const char *, double &v) { v = 1e-3; } };
+struct Options { std::string getArgs(const char *) { return ""; } template <class T> void getArgs(const char *, T &v) { v = 1e-3; } };
 namespace bdryBase { enum { bcType_zeroDirichletX_zeroNeumann, bcType_zeroDirichletX_udfNeumann, bcType_zeroDirichletY_zeroNeumann,
   bcType_zeroDirichletY_udfNeumann, bcType_zeroDirichletZ_zeroNeumann, bcType_zeroDirichletZ_udfNeumann }; }
 struct Bc { int typeId(int, const std::string &) { return -1; } };

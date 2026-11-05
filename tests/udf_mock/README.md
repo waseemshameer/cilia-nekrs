@@ -6,10 +6,14 @@ checks one part of the distributed iqn path on a box mesh of linear elements spl
 wrapping the periodic seam, `block` in x-y, `scatter` = 4 x 4 x 3 chunks hashed to ranks). `mockProc` stands in for
 `find()`'s rank.
 
-**All 16 checks:** `./run_all.sh` builds everything in a temporary folder and runs each check with a timeout (60 s by
+**All 19 checks:** `./run_all.sh` builds everything in a temporary folder and runs each check with a timeout (60 s by
 default, `MOCK_TIMEOUT`), because some bugs hang instead of failing. CI runs it. The commands below run one check by
 hand. `cmp.py` exits non-zero above a relative difference of 1e-12. The mock can't catch a bug it shares with the udf,
 such as a wrong `rcutFactor`; answers need the `small4` gate.
+
+**Float (FP32):** `-DNEKRS_USE_DFLOAT_FLOAT` builds any driver with `dfloat = float`, as `nekrs-fp32` does. `run_all.sh`
+only compiles these (3 of the 19 checks): `driver_kin` and `driver_dist` have limits of 1e-13 and 1e-12 that float can't
+meet, so their exit codes mean nothing in float, and `cmp.py` reads doubles.
 
 ```bash
 python3 okl2cpp.py ../../cilia.udf new_udf.cpp     # once per udf version

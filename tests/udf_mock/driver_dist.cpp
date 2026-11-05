@@ -35,7 +35,7 @@ std::vector<dfloat> allgatherOwn(const std::vector<dfloat> &slice, int nc) {
   for (int k = 0; k < N_cilia; k++) cnt[ciliumOwner[k]] += w;
   for (int r = 0; r < nRanks; r++) disp[r + 1] = disp[r] + cnt[r];
   std::vector<dfloat> all(disp[nRanks]), out((size_t)N_cilia * w);
-  MPI_Allgatherv(slice.data(), (int)slice.size(), MPI_DOUBLE, all.data(), cnt.data(), disp.data(), MPI_DOUBLE, MPI_COMM_WORLD);
+  MPI_Allgatherv(slice.data(), (int)slice.size(), MPI_DFLOAT, all.data(), cnt.data(), disp.data(), MPI_DFLOAT, MPI_COMM_WORLD);
   std::vector<int> next(disp.begin(), disp.end() - 1);
   for (int k = 0; k < N_cilia; k++) {
     const int r = ciliumOwner[k];
@@ -53,7 +53,7 @@ void mockEval(dfloat *u) {
   const dfloat e0 = epsilon;
   for (int i = 0; i < nOwnPanels; i++) {
     const dfloat *X = xs.data();
-    dfloat us[3] = {0.05 * X[i*3 + 2], 0.0, 0.0};   // background shear
+    dfloat us[3] = {(dfloat)(0.05 * X[i*3 + 2]), 0.0, 0.0};   // background shear
     for (int j = 0; j < N_part; j++) {
       dfloat d[3], r = 0;
       for (int c = 0; c < 3; c++) { d[c] = X[i*3 + c] - XG[j*3 + c]; r += d[c]*d[c]; }
@@ -197,13 +197,13 @@ int main(int argc, char **argv) {
         }
       }
       dfloat er[2] = {err, ref};
-      MPI_Allreduce(MPI_IN_PLACE, er, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
-      MPI_Allreduce(MPI_IN_PLACE, er + 1, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, er, 1, MPI_DFLOAT, MPI_MAX, MPI_COMM_WORLD);
+      MPI_Allreduce(MPI_IN_PLACE, er + 1, 1, MPI_DFLOAT, MPI_MAX, MPI_COMM_WORLD);
       worstSpread = std::max(worstSpread, er[1] > 0 ? er[0] / er[1] : er[0]);
     }
   }
   if (rank == 0) fclose(fo);
-  MPI_Allreduce(MPI_IN_PLACE, &worstHalo, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+  MPI_Allreduce(MPI_IN_PLACE, &worstHalo, 1, MPI_DFLOAT, MPI_MAX, MPI_COMM_WORLD);
   const bool ok = worstHalo == 0 && worstSpread < 1e-12;
   if (rank == 0)
     printf("R=%d %s: %d steps, %d checks; halo F max diff %.1e, fused spread vs brute max rel diff %.2e  %s\n", R,
