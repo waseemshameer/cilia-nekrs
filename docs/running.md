@@ -88,6 +88,23 @@ Measured on `small4` (base mesh 10 × 10 × 12, N = 5, dt 1e-3, tightened solver
 
 Convergence is about second order. A Richardson estimate puts N_p = 40's own error at about 0.16% in ū and 0.5% in mean wall shear. Time per step did not change between N_p 10 and 80 on this case, so the finer setting costs nothing here. N_p = 20 to 40 moved the answer by the same amount on the base mesh (3.22e-3) and on the finest mesh tested (3.16e-3), so the mesh and N_p errors are independent.
 
+## What N_p, ε and the cutoff cost
+
+Measured on `small4` on one A100 and one node, with one change per run from the production settings (`studies/make_cost_sweep.py`). Time per step is cycle 2; the control is 0.0307 s/step. Mean wall shear is relative to the reference.
+
+| Change | Time per step | Gate | Mean wall shear |
+|---|---|---|---|
+| r_cut 3.4 ε | +1.2% | pass | −0.01% |
+| r_cut 3.0 ε | +4.9% | fail | −0.19% |
+| N_p 20 | −1.6% | fail | +1.5% |
+| N_p 30 | −0.8% | fail | +0.42% |
+| N_p 80 | +5.0% | pass | −0.37% |
+| ε 0.13 | −5.1% | fail | −17% |
+| ε 0.0707 | +10.1% | fail | +15% |
+| ε 0.05 | +32.6% | fail | +26% |
+
+So all three stay: N_p = 40, ε = 0.1, r_cut = 3.8 ε. The cilia model is about 6% of the step here and 2.8% on `tiled8`, so N_p and the cutoff have little time to give. A shorter cutoff also backfires: spreading gets cheaper, but the sharper truncation adds about 5% more velocity iterations at 3.0 ε. Only ε changes the fluid solve much, and it does so by changing the answer.
+
 ## Regression gate
 
 ```bash
