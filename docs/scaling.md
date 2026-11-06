@@ -51,17 +51,14 @@ This check replaces an earlier one, ū within 1e-6 at t = 0.1, which couldn't so
 | Chebyshev+Jacobi, velocity | Degree 2 gave 1.11×; `src/core/elliptic/elliptic.cpp:469-475` requires a Jacobi smoother for velocity multigrid |
 | BoomerAMG on the host | The v26.0 default (`doc/parHelp.txt:139-141`); the coarse grid is 3.5 s of about 148 s on 4 GPUs, host-staged |
 | Default pMG schedule | Phi21 Sec 6: order and schedule move time only 10–20% |
-| `pcg` non-block velocity | Required with multigrid (`src/core/elliptic/elliptic.cpp:463-467`); 14.2 to 11.4 s/cycle on `small4`. Retest below |
-| Projection initial guess | 1.43× at the default 5 vectors, 23.6 to 14.1 s/cycle at 160; settled at 40 once velocity multigrid was in. Vector count retest below |
+| `pcg` non-block velocity | Required with multigrid (`src/core/elliptic/elliptic.cpp:463-467`); 14.2 to 11.4 s/cycle on `small4`. On `tiled8` on 4 GPUs, one node, `pcg` + Jacobi is 3.1× slower: 0.892 to 2.774 s/step ([#5](https://github.com/waseemshameer/cilia-nekrs/issues/5)) |
+| Projection initial guess | 1.43× at the default 5 vectors, 23.6 to 14.1 s/cycle at 160; settled at 40 once velocity multigrid was in. On `tiled8` on 4 GPUs, one node, 20 vectors gives no gain: 0.892 to 0.906 s/step ([#5](https://github.com/waseemshameer/cilia-nekrs/issues/5)) |
 | gs autotune (`OOGS_MODE` unset), comm overlap on | Min25 Sec 1.4; `src/platform/ogs/oogs.cpp:559`; `src/lib/nekrs.cpp:78` |
 | `residualTol` 3e-3 | Passes the gate, 1.25× for velocity and 1.13× for pressure. It's scaled by √volume (`src/core/elliptic/elliptic.cpp:408`), so it means the same on any tile size |
 
 ## Under test
 
-In this order, because each one changes the balance between compute and communication.
-
-1. **Velocity solver on 4 GPUs:** `pcg` + Jacobi, and 20 projection vectors. Any winner must also pass the gate on `small4` ([#5](https://github.com/waseemshameer/cilia-nekrs/issues/5)).
-2. **GPU-aware MPI across nodes,** then the efficiency curve and a named n0.8 ([#16](https://github.com/waseemshameer/cilia-nekrs/issues/16)).
+**GPU-aware MPI across nodes,** then the efficiency curve and a named n0.8. The velocity solver gets a retest there too, because multigrid's short coarse-level messages then cross the network ([#16](https://github.com/waseemshameer/cilia-nekrs/issues/16)).
 
 ## Advice we checked and didn't adopt
 
