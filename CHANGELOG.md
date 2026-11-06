@@ -15,7 +15,8 @@ Model and answers:
 - `gate.py` fails if the nekRS commit in the log differs from the new `NEKRS_VERSION`, and it prints file names only.
 
 Code:
-- Multiple GPUs: each rank holds its own cilia plus a halo, with kinematics and binning on the device. Multi-GPU speed isn't quoted yet.
+- Multiple GPUs: each rank holds its own cilia plus a halo, with kinematics and binning on the device.
+- GPU-aware MPI: 38% less s/step on `tiled8` on 4 GPUs, same node, and 4 against 1 GPU passes the gate on cycle 2. It stays off on a machine until a run there shows the same ([rule](docs/scaling.md#load-per-gpu)).
 - `3d.udf` is now `cilia.udf`. Analysis scripts moved to `studies/`, and tests to `tests/`.
 - `job_template.sh` runs several cases on one node and reads an optional `cluster.env` and per-case `run.env`.
 - `cilia.udf` compiles and passes setup in `nekrs-fp32`, and CI keeps it building. Production stays FP64 ([why](docs/scaling.md#advice-we-checked-and-didnt-adopt)).

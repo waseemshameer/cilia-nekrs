@@ -29,7 +29,7 @@ There's no calendar and no release per pull request. One of these triggers it:
 
 1. **Runs,** on commits whose listed files (`tools/listed_files.txt`) match the commit to be tagged:
    - `small4` on 1 GPU at production settings, gated against `cases/small4/reference.out`. The timing comes from this same run. A claimed speed gain also needs back-to-back runs on one node.
-   - `tiled8` to t = 0.1 at N_p = 40 on 1 and 4 GPUs, same node and commit, reporting the ū difference, corrector counts and capped steps. `small4` can't test the multi-rank cilia code, since on 2 ranks one rank owns all 4 cilia. The pass line isn't set yet, and v0.4.0 can't go out until the strong-scaling work sets it.
+   - `tiled8` for 2 cycles at N_p = 40 on 1 and 4 GPUs, same node and commit. `gate.py` on the 4-GPU log with the 1-GPU log as `--ref` must pass, and the report gives corrector counts and capped steps. `small4` can't test the multi-rank cilia code, since on 2 ranks one rank owns all 4 cilia. This costs about 5.1 GPU-h on A100s, because the 1-GPU run holds all 4 GPUs. Same node stays the rule because a split across nodes moved the efficiency from 0.76 to 0.81.
    - A chain can be reused if the listed files match. A docs-only patch needs nothing new.
 2. **Changelog:** turn `## Unreleased` into `## vX.Y.Z (YYYY-MM-DD)`, opening with these lines:
    ```
