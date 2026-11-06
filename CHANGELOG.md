@@ -1,12 +1,12 @@
 # Changelog
 
-## Unreleased
+## v0.4.0 (2026-11-06)
 
-Development before this point was private. From here on it happens in this repository, so this entry covers everything since v0.3.0 in one step. Final figures are set at release.
-
-**Answers:** changed. N_p 20 → 40; worst metric ∫dv/dz moves 3.2e-3 of peak. New reference; production against it: L2 1.56e-4, L∞ 1.01e-3.
-**Speed:** 32.5 s/cycle, `small4`, one A100.
+**Answers:** changed. N_p 20 → 40; worst metric ∫dv/dz moves 3.2e-3 of peak. New reference; production against it: L2 1.53e-4, L∞ 9.32e-4.
+**Speed:** 30.6 s/cycle, `small4`, one A100.
 **nekRS:** v26.0 `96b3cf9e`.
+
+Development before this point was private. From here on it happens in this repository, so this entry covers everything since v0.3.0 in one step.
 
 Model and answers:
 - Production uses N_p = 40 (was 20), measured against N_p = 80 ([docs/running.md](docs/running.md#why-n_p--40)).
@@ -15,7 +15,7 @@ Model and answers:
 - `gate.py` fails if the nekRS commit in the log differs from the new `NEKRS_VERSION`, and it prints file names only.
 
 Code:
-- Multiple GPUs: each rank holds its own cilia plus a halo, with kinematics and binning on the device.
+- Multiple GPUs: each rank holds its own cilia plus a halo, with kinematics and binning on the device. `tiled8` on 4 GPUs against 1 on one node runs 3.05× faster, an efficiency of 0.76 ([numbers](docs/performance.md)).
 - GPU-aware MPI: 38% less s/step on `tiled8` on 4 GPUs, same node, and 4 against 1 GPU passes the gate on cycle 2. It stays off on a machine until a run there shows the same ([rule](docs/scaling.md#load-per-gpu)).
 - `3d.udf` is now `cilia.udf`. Analysis scripts moved to `studies/`, and tests to `tests/`.
 - `job_template.sh` runs several cases on one node and reads an optional `cluster.env` and per-case `run.env`.

@@ -32,10 +32,11 @@ More in [docs/running.md](docs/running.md).
 
 ## Measured speed
 
-v0.3, one NVIDIA A100, N_p = 20:
+v0.4, NVIDIA A100, N_p = 40:
 
-- `small4` (4 cilia, 1,200 elements): about 30 s per beat cycle
-- `tiled8` (256 cilia, 76,800 elements): about 1,640 s per beat cycle, with the cilia model at 2.8% of the step
+- `small4` (4 cilia, 1,200 elements), one GPU: 30.6 s per beat cycle
+- `tiled8` (256 cilia, 76,800 elements), one GPU: about 1,540 s per beat cycle
+- `tiled8`, 4 GPUs on one node with GPU-aware MPI: about 504 s per beat cycle, 3.05× faster than one GPU (efficiency 0.76)
 
 Details: [performance](docs/performance.md), [how the speed was reached](docs/computational.md), [scaling setup and evidence](docs/scaling.md). What's next: [open Issues](https://github.com/waseemshameer/cilia-nekrs/issues).
 
@@ -59,7 +60,7 @@ The CI badge only means the GPU-less checks passed. It says nothing about answer
 | `tools/` | `log-triage/`, `scaling_timing.py`, repo and release checks |
 | `docs/` | [Model (PDF)](docs/model.pdf), [running](docs/running.md), [the case](docs/case.md), [performance](docs/performance.md), [computational work](docs/computational.md), [scaling](docs/scaling.md), [releasing](docs/releasing.md), [decisions](docs/adr/), [log signals](docs/nekrs-log-signals.md) |
 
-`docs/model.pdf` is rebuilt only when a release changes it, so until the next release it still shows v0.2's N_p = 20. `docs/model/model.tex` is current.
+`docs/model.pdf` is built from `docs/model/model.tex`, and rebuilt only when a release changes it.
 
 ## How this code is written
 

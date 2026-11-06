@@ -157,5 +157,5 @@ On `small4` (4 cilia) none of this shows: it runs at about 30 s per cycle, as in
 ## 6. What is left
 
 - **Per-step host work:** panel kinematics and binning are still built on the host and uploaded once per step, and the body-force field is reset from a saved copy every corrector. Together about 8% of the remaining cilia time on `tiled8` (0.2% of the step).
-- **Multiple GPUs:** in v0.3 every rank holds every panel. On `main` each rank keeps only its own cilia plus a halo of those whose kernels reach its elements. Scaling work: [scaling.md](scaling.md).
+- **Multiple GPUs:** in v0.3 every rank holds every panel. From v0.4 each rank keeps only its own cilia plus a halo of those whose kernels reach its elements. Scaling work: [scaling.md](scaling.md).
 - **Coupling:** the corrector count (2.3 on `small4`, 4.6 on `tiled8`) multiplies the fluid cost, and the IQN settings still cap an occasional step on `tiled8` in some runs.
