@@ -69,6 +69,6 @@ The CI badge only means the GPU-less checks passed. It says nothing about answer
 ## Contributing, citing, licence
 
 - **Contributing:** see [CONTRIBUTING.md](CONTRIBUTING.md).
-- **Citing:** see [CITATION.cff](CITATION.cff), and name the tag you used. A DOI starts with v0.4.0.
+- **Citing:** see [CITATION.cff](CITATION.cff), and name the tag you used. All versions: DOI [10.5281/zenodo.24012443](https://doi.org/10.5281/zenodo.24012443). A specific result cites its version's DOI, listed on that page.
 - **Licence:** MIT, see [LICENSE](LICENSE).
 - **Acknowledgements:** the lab, colleagues and computing resources behind this work are in [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).

@@ -3,6 +3,7 @@ message: "If you use this software, please cite it as below."
 title: "cilia-nekrs: a GPU actuator-filament model of ciliary flow in nekRS"
 version: 0.4.0
 date-released: 2026-11-06
+doi: 10.5281/zenodo.24012443
 license: MIT
 repository-code: "https://github.com/waseemshameer/cilia-nekrs"
 authors:
