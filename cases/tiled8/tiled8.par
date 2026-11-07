@@ -23,7 +23,7 @@ boundaryTypeMap = wall, slipZ   # IDs from small4.usr; slipZ needs fixAlignedAvg
 solver = pcg                    # pMG (needs the non-block solver) 14.2 -> 11.4 s/cycle
 preconditioner = multigrid
 initialGuess = projectionAconj+nVector=40    # projection 1.43x; 160 vectors (default 5) 23.6 -> 14.1 s/cycle; 40 with degree 2, 8.25 -> 7.50
-residualTol = 3.0e-3             # 1e-4 -> 3e-3 gives 11.4 -> 9.2 s/cycle, gate metrics unchanged
+residualTol = 2.0e-3             # 3e-3 -> 2e-3: fewer correctors in the hard phases, tiled8 0.936x s/step over 2 cycles (#18)
 smootherType = fourthoptcheby+jac+degree=2   # pMG Chebyshev degree 1 (default) -> 2 gives 9.17 -> 8.25 s/cycle
 density = 1.0
 viscosity = -1.0e-3      # negative = Re; the cilia drag uses this mu = 1/Re too
