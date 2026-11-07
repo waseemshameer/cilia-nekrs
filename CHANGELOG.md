@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+**Answers:** within the gate. `small4` against the reference, worst metric ∫dv/dz: L2 1.54e-4, L∞ 8.95e-4 of peak.
+**Speed:** `tiled8` on 4 GPUs 0.936× s/step (same node); `small4` unchanged.
+
+- Velocity `residualTol` 3e-3 → 2e-3 in all case `.par` files; pressure stays at 3e-3. At 3e-3 the inexact velocity solve added coupling correctors in the hard phases of the beat on the tiled cases. `tiled8` correctors per step 4.41 → 3.68 ([why](docs/scaling.md#settings-we-keep), [#18](https://github.com/waseemshameer/cilia-nekrs/issues/18)).
+
 ## v0.4.0 (2026-11-06)
 
 **Answers:** changed. N_p 20 → 40; worst metric ∫dv/dz moves 3.2e-3 of peak. New reference; production against it: L2 1.53e-4, L∞ 9.32e-4.

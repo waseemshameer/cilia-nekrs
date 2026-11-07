@@ -54,7 +54,7 @@ This check replaces an earlier one, ū within 1e-6 at t = 0.1, which couldn't so
 | `pcg` non-block velocity | Required with multigrid (`src/core/elliptic/elliptic.cpp:463-467`); 14.2 to 11.4 s/cycle on `small4`. On `tiled8` on 4 GPUs, one node, `pcg` + Jacobi is 3.1× slower: 0.892 to 2.774 s/step ([#5](https://github.com/waseemshameer/cilia-nekrs/issues/5)) |
 | Projection initial guess | 1.43× at the default 5 vectors, 23.6 to 14.1 s/cycle at 160; settled at 40 once velocity multigrid was in. On `tiled8` on 4 GPUs, one node, 20 vectors gives no gain: 0.892 to 0.906 s/step ([#5](https://github.com/waseemshameer/cilia-nekrs/issues/5)) |
 | gs autotune (`OOGS_MODE` unset), comm overlap on | Min25 Sec 1.4; `src/platform/ogs/oogs.cpp:559`; `src/lib/nekrs.cpp:78` |
-| `residualTol` 3e-3 | Passes the gate, 1.25× for velocity and 1.13× for pressure. It's scaled by √volume (`src/core/elliptic/elliptic.cpp:408`), so it means the same on any tile size |
+| `residualTol` 2e-3 velocity, 3e-3 pressure | 3e-3 for both passed the gate and was 1.25× for velocity and 1.13× for pressure against 1e-4. On the tiled cases, though, the inexact velocity solve adds coupling correctors in the hard phases of the beat. Velocity at 2e-3 takes `tiled8` on 4 GPUs from 4.41 to 3.68 correctors per step and 0.936× s/step, and still passes the gate (∫dv/dz L2 1.54e-4, L∞ 8.95e-4 of peak). 1e-3 cuts more correctors but each solve costs more: 0.973×. Tighter pressure doesn't cut correctors ([#18](https://github.com/waseemshameer/cilia-nekrs/issues/18)). The tolerance is scaled by √volume (`src/core/elliptic/elliptic.cpp:408`), so it means the same on any tile size |
 
 ## Under test
 
@@ -70,7 +70,7 @@ This check replaces an earlier one, ū within 1e-6 at t = 0.1, which couldn't so
 | "3–5× from projection" | The number has no support. Ours: 1.43× at the default, 1.67× at 160 vectors |
 | "Coarse-grid allreduce dominates" | The coarse grid is 2.4% of our 4-GPU host-staged solve. This rejects the coarse-grid claim only: allreduce in PCG and projection is unmeasured |
 | BoomerAMG on the device | The same host-staged 2.4%. Reopens only if the coarse grid passes 10% of the solve at scale, because below that even an instant coarse solve saves under 10% |
-| Tolerances 1e-6 (pressure) and 1e-8 (velocity) | The gate passes at 3e-3, and they're tighter than the developers' own 1e-4 and 1e-6 (Min25 Sec 2) |
+| Tolerances 1e-6 (pressure) and 1e-8 (velocity) | The gate passes at 2e-3 and 3e-3, and they're tighter than the developers' own 1e-4 and 1e-6 (Min25 Sec 2) |
 | Whole-solver FP32, the `nekrs-fp32` binary (`CMakeLists.txt:155`, Discussion [#626](https://github.com/Nek5000/nekRS/discussions/626)) | It passes the gate on `small4`, but gains little: 7% with `solver = gmres+flexible+nvector=15` in `[FLUID PRESSURE]`, one run each, because the preconditioner is already float. Its default pressure solver, with iterative refinement, is 9% slower. Float kinematics error grows with t unless t is wrapped into one period. It uses 47% less device memory, but FP64 needs only about 26 GB per GPU at 38,400 elements, on an 80 GB A100. Reopens if the 80% load nears GPU memory ([#4](https://github.com/waseemshameer/cilia-nekrs/issues/4)) |
 | Explicit `pMGSchedule`, `[SCALAR01]`, ALE vs immersed boundary | The default schedule is fine, there's no scalar, and the case is already Eulerian |
 

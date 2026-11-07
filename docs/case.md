@@ -6,7 +6,7 @@ The cilia model itself is written up in [model.pdf](model.pdf).
 
 - Box 1 × 1 × 1.5 in units of the cilium length (x, y periodic; no-slip wall at z = 0; symmetry plane at z = 1.5), 10 × 10 × 12 elements, N = 5.
 - 4 cilia: a 2 × 2 patch with spacing 0.269 (diagonal 0.380), taken from one basal-body patch of a ciliated cell. All four beat in the cell direction α (`make_small4.py --seed 1` draws α from N(0, 25°)), in phase, and the square lattice is turned 28° from the beat so neighbours stay at least 0.126 L apart (more than one cilium diameter). Neighbouring kernels overlap, as in dense ciliated tissue.
-- Settings: Stokes, BDF2, dt = 1e-3 (1,000 steps per beat), N_p = 40, residual tolerances 3e-3, implicit IQN coupling with tolerance 3e-5. The start-up transient is gone by t ≈ 0.5 and cycle 2 is periodic.
+- Settings: Stokes, BDF2, dt = 1e-3 (1,000 steps per beat), N_p = 40, residual tolerances 2e-3 (velocity) and 3e-3 (pressure), implicit IQN coupling with tolerance 3e-5. The start-up transient is gone by t ≈ 0.5 and cycle 2 is periodic.
 - Boundary IDs for the solvers come from `small4.usr` (wall = 1, top = 2); the top is `slipZ`.
 
 Regenerate the layout and box with `python3 make_small4.py --seed 1`; the mesh is `small4.re2` (from `small4.box` with `genbox`).
