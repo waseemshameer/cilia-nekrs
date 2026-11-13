@@ -5,6 +5,7 @@
 **Answers:** within the gate. `small4` against the reference, worst metric ∫dv/dz: L2 1.54e-4, L∞ 8.95e-4 of peak.
 **Speed:** `tiled8` on 4 GPUs 0.936× s/step (same node); `small4` unchanged.
 
+- The `wall` line logs plane pressure against its volume mean, ∫(p − p̄), instead of ∫p. Raw ∫p carried nekRS's node-mean pressure constant, which moves with the mesh by about 1e-3 of ∫p, so meshes couldn't be compared on it. New reference ([why](docs/case.md#reference-run), [#17](https://github.com/waseemshameer/cilia-nekrs/issues/17)).
 - Velocity `residualTol` 3e-3 → 2e-3 in all case `.par` files; pressure stays at 3e-3. At 3e-3 the inexact velocity solve added coupling correctors in the hard phases of the beat on the tiled cases. `tiled8` correctors per step 4.41 → 3.68 ([why](docs/scaling.md#settings-we-keep), [#18](https://github.com/waseemshameer/cilia-nekrs/issues/18)).
 
 ## v0.4.0 (2026-11-06)

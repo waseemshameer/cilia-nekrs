@@ -31,4 +31,4 @@ The `small4`, `tiled2`, `tiled4` and `tiled8` `.re2` files are in git, the large
 
 The file's name never changes. It is replaced in place only on an answer change, the changelog says when, and each tag holds the reference its statements were measured against.
 
-∫p over a plane depends on the pressure gauge (periodic x, y with a symmetry top), so treat it as a regression check, not as physics.
+Pressure in this box (periodic x, y, symmetry top) is fixed only up to a constant. nekRS sets the constant through an unweighted mean over the mesh nodes, which moves when the mesh changes, so the `wall` line logs ∫(p − p̄) with p̄ the volume mean. That is the same on any mesh that resolves the flow, so one reference serves them all.

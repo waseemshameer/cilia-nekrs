@@ -64,7 +64,7 @@ Every `diagnosticInterval` steps rank 0 prints
 
 ```
 time ubar |V|max  vals
-time ∫u ∫v ∫p ∫du/dz ∫dv/dz (plane z = wallPlaneZ)  ∫p ∫du/dz ∫dv/dz (wall z = 0)  wall
+time ∫u ∫v ∫(p − p̄) ∫du/dz ∫dv/dz (plane z = wallPlaneZ)  ∫(p − p̄) ∫du/dz ∫dv/dz (wall z = 0)  wall
 ```
 
 and with `couplingScheme = iqn` one line per step
