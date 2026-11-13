@@ -26,8 +26,8 @@ The fluid solve is most of the cost when the number of cilia is small. As the nu
 
 ## 2. Test cases and how changes were judged
 
-- **`small4`:** 4 cilia, 1,200 elements, 1 × 1 × 1.5 box. Small enough to run two beat cycles in about a minute; used for every solver change and as the regression gate.
-- **`tiled2`, `tiled4`, `tiled8`:** the `small4` cell repeated k × k times (`cases/make_tiled.py`): 16, 64 and 256 cilia; 4,800, 19,200 and 76,800 elements. Used to measure how the cilia cost grows. `tiled2` reproduces `small4` per unit area (gate passes with `gate.py --per-area 4`), so the tiling is the same flow.
+- **`small4`:** 4 cilia, 1,200 elements (640 since v0.5), 1 × 1 × 1.5 box. Small enough to run two beat cycles in about a minute; used for every solver change and as the regression gate.
+- **`tiled2`, `tiled4`, `tiled8`:** the `small4` cell repeated k × k times (`cases/make_tiled.py`): 16, 64 and 256 cilia; 4,800, 19,200 and 76,800 elements (0.53× that since v0.5; `tiled2` removed then). Used to measure how the cilia cost grows. `tiled2` reproduces `small4` per unit area (gate passes with `gate.py --per-area 4`), so the tiling is the same flow.
 
 **Every change had to keep the answer.** `gate.py` compares mean flow, maximum velocity and wall integrals over the second beat cycle with a tight reference run; up to v0.3 a change passed if every quantity stayed within 0.1% of its peak. The current rule is in [running.md](running.md#regression-gate). New GPU code paths also have built-in checks that run the old path side by side for the first calls and print the difference (`binningCheck`, `iqnCheck`); they agree to round-off (≤ 1e-15 for forces, ≤ 1e-12 for the IQN update).
 

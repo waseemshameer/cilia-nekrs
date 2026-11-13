@@ -2,9 +2,11 @@
 
 ## Unreleased
 
-**Answers:** changed in how ∫p is logged; the flow is not. New reference: against the old one every other metric moves ≤ 2e-5 of peak, ∫p 1.7e-3 (L2). `small4` against it, worst metric ∫dv/dz: L2 1.57e-4, L∞ 9.54e-4 of peak. Velocity `residualTol` 2e-3 was within the gate against the old reference (∫dv/dz: L2 1.54e-4, L∞ 8.95e-4).
-**Speed:** `tiled8` on 4 GPUs 0.936× s/step (same node); `small4` unchanged.
+**Answers:** changed in how ∫p is logged and by the coarser mesh, within the gate. New reference: against the old one every other metric moves ≤ 2e-5 of peak, ∫p 1.7e-3 (L2). `small4` against it, worst metric ∫dv/dz: L2 1.61e-4, L∞ 1.08e-3 of peak (on 10 × 10 × 12: 1.57e-4, 9.54e-4). Velocity `residualTol` 2e-3 was within the gate against the old reference (∫dv/dz: L2 1.54e-4, L∞ 8.95e-4).
+**Speed:** `tiled8` on 4 GPUs 0.936× s/step from the velocity tolerance (same node), then 0.557× from the mesh (other node; nodes repeat to about 1–2%).
 
+- Mesh 8 × 8 × 10 elements per tile (was 10 × 10 × 12): `small4` 640 elements, `tiled8` 40,960. The reference stays on 10 × 10 × 12 ([why](docs/case.md#mesh-per-tile), [#17](https://github.com/waseemshameer/cilia-nekrs/issues/17)).
+- The tiled cases are one scaling ladder at 128 cilia per GPU: new `tiled8x4` and `tiled16x8`, `make_tiled.py --ky` for k × ky boxes and `--mesh` for the elements per tile; `tiled2` removed ([cases](docs/case.md#tiled-cases)).
 - The `wall` line logs plane pressure against its volume mean, ∫(p − p̄), instead of ∫p. Raw ∫p carried nekRS's node-mean pressure constant, which moves with the mesh by about 1e-3 of ∫p, so meshes couldn't be compared on it. New reference ([why](docs/case.md#reference-run), [#17](https://github.com/waseemshameer/cilia-nekrs/issues/17)).
 - Velocity `residualTol` 3e-3 → 2e-3 in all case `.par` files; pressure stays at 3e-3. At 3e-3 the inexact velocity solve added coupling correctors in the hard phases of the beat on the tiled cases. `tiled8` correctors per step 4.41 → 3.68 ([why](docs/scaling.md#settings-we-keep), [#18](https://github.com/waseemshameer/cilia-nekrs/issues/18)).
 

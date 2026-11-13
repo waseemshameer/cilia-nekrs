@@ -32,7 +32,7 @@ More in [docs/running.md](docs/running.md).
 
 ## Measured speed
 
-v0.4, NVIDIA A100, N_p = 40:
+v0.4, NVIDIA A100, N_p = 40, on the v0.4 mesh (10 × 10 × 12 elements per tile; 8 × 8 × 10 since v0.5, [why](docs/case.md#mesh-per-tile)):
 
 - `small4` (4 cilia, 1,200 elements), one GPU: 30.6 s per beat cycle
 - `tiled8` (256 cilia, 76,800 elements), one GPU: about 1,540 s per beat cycle
@@ -51,8 +51,8 @@ The CI badge only means the GPU-less checks passed. It says nothing about answer
 | Path | What |
 |---|---|
 | `cilia.udf` | The cilia model: beat kinematics, RFT drag, self-flow removal, spreading kernel, IQN coupling, diagnostics |
-| `cases/small4/` | Benchmark: 4 cilia in a periodic 1 × 1 × 1.5 box, 1,200 elements, N = 5, with the gate's reference |
-| `cases/tiled{2,4,8}/`, `cases/make_tiled.py` | `small4` tiled k × k: 16, 64, 256 cilia, for profiling at scale |
+| `cases/small4/` | Benchmark: 4 cilia in a periodic 1 × 1 × 1.5 box, 640 elements, N = 5, with the gate's reference |
+| `cases/tiled*/`, `cases/make_tiled.py` | `small4` tiled k × ky: the scaling ladder at 128 cilia per GPU ([cases](docs/case.md#tiled-cases)) |
 | `gate.py`, `NEKRS_VERSION` | Regression gate against the `small4` reference; the nekRS commit it requires |
 | `job_template.sh` | Example Slurm script; adapt it to your cluster. It has only run on one cluster |
 | `studies/` | Finished one-off analyses behind model choices; most need your own run logs |
