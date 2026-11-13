@@ -27,7 +27,7 @@ The `small4`, `tiled2`, `tiled4` and `tiled8` `.re2` files are in git, the large
 
 ## Reference run
 
-`cases/small4/reference.out` holds the `cilia`, `vals` and `wall` lines over t ∈ [1, 2] of `small4` at tighter settings than production: dt = 1e-4, coupling tolerance 1e-5, solver tolerances 1e-4. Everything else is the production model: mesh 10 × 10 × 12, N = 5, N_p = 40, `gauss2`, ε = 0.1, nekRS on one NVIDIA A100. It has only been run on an A100. Production settings pass the gate against it with a cycle L2 of 1.53e-4 and a maximum of 9.32e-4 of peak on the worst quantity (∫∂v/∂z), so the L2 margin is small: changes that are meant to keep the answer should be judged with it, and changes to dt or tolerances will show up.
+`cases/small4/reference.out` holds the `cilia`, `vals` and `wall` lines over t ∈ [1, 2] of `small4` at tighter settings than production: dt = 1e-4, coupling tolerance 1e-5, solver tolerances 1e-4. Everything else is the production model: mesh 10 × 10 × 12, N = 5, N_p = 40, `gauss2`, ε = 0.1, nekRS on one NVIDIA A100. It has only been run on an A100. Production settings pass the gate against it with a cycle L2 of 1.57e-4 and a maximum of 9.54e-4 of peak on the worst quantity (∫∂v/∂z), so the L2 margin is small: changes that are meant to keep the answer should be judged with it, and changes to dt or tolerances will show up.
 
 The file's name never changes. It is replaced in place only on an answer change, the changelog says when, and each tag holds the reference its statements were measured against.
 

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-**Answers:** within the gate. `small4` against the reference, worst metric ∫dv/dz: L2 1.54e-4, L∞ 8.95e-4 of peak.
+**Answers:** changed in how ∫p is logged; the flow is not. New reference: against the old one every other metric moves ≤ 2e-5 of peak, ∫p 1.7e-3 (L2). `small4` against it, worst metric ∫dv/dz: L2 1.57e-4, L∞ 9.54e-4 of peak. Velocity `residualTol` 2e-3 was within the gate against the old reference (∫dv/dz: L2 1.54e-4, L∞ 8.95e-4).
 **Speed:** `tiled8` on 4 GPUs 0.936× s/step (same node); `small4` unchanged.
 
 - The `wall` line logs plane pressure against its volume mean, ∫(p − p̄), instead of ∫p. Raw ∫p carried nekRS's node-mean pressure constant, which moves with the mesh by about 1e-3 of ∫p, so meshes couldn't be compared on it. New reference ([why](docs/case.md#reference-run), [#17](https://github.com/waseemshameer/cilia-nekrs/issues/17)).
