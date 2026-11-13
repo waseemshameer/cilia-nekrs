@@ -101,6 +101,8 @@ Fix: `couplingRestart = 10`. A step that needs 10 correctors drops the pairs of 
 
 3.6× faster than v0.2 through that phase, with every setting agreeing on the mean flow to 3e-6.
 
+Checked again on larger boxes at production solver tolerances (#9): with per-corrector output, `tiled8` (3 runs of 2,000 steps) and `tiled16` (1,000 steps, 16 GPUs) capped no step. Capped steps seen before (2 in an earlier `tiled16` run, 2 in an early `tiled8` run) didn't come back when the same case was rerun with the same settings, so they sit at round-off level. The long steps fall steadily to the tolerance, so a stop on stall would have nothing to catch. Steps of 10 or more correctors hold at most 4.4% of the correctors, so even a perfect rule would save under 1%. The setting stays. What grows with box size is the typical step (3.67 correctors/step on `tiled8`, 4.54 on `tiled16`, after the start-up).
+
 ### 5.2 Binned force spreading
 
 Panels are sorted every step into uniform bins of about half r_cut, periodic in x and y (a stable counting sort, so the sum order and the result are deterministic). For each element, the bins within r_cut of its bounding box are found once at setup, since the mesh does not move. The kernel `addCiliaForceBinned` then loops each element only over the panels in those bins. The per-pair arithmetic is unchanged, so the force field equals the all-pairs result to round-off (≤ 6.4e-16 of the maximum force).
