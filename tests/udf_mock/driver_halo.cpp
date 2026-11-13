@@ -36,7 +36,7 @@ int main(int argc, char **argv) {
   mode = m == "slab" ? 0 : m == "block" ? 1 : 2;
   const int nPhase = atoi(argv[10]);
 
-  // Production model settings (cases/tiled2/tiled2.par)
+  // Model settings of the v0.3 case files (N_p was 20 then)
   N_p = 20; epsilon = 0.1; rcutFactor = 3.8; kernel2 = 1; panelLength = "arclength"; binWidth = 0.5;
   {
     std::ifstream in(coordinatesFile);

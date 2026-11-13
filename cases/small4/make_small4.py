@@ -43,7 +43,7 @@ BOX = """-3                     spatial dimension (will create box.re2)
 #========================================================
 #
 Box
--10 -10 -12                               Nelx  Nely Nelz
+-8 -8 -10                                 Nelx  Nely Nelz
 -0.5 0.5 1.0                              x0 x1 ratio
 -0.5 0.5 1.0                              y0 y1 ratio
 0.0 1.5 1.0                               z0 z1 ratio

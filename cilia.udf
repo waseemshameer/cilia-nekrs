@@ -724,7 +724,7 @@ void ptoc(const std::string &tag) {
 }
 
 // all diagnostics in one pass, one partial result per element (printDiagnostics sums them).
-// out[e*10 + q]: q = 0 int u dV, 1..8 the 'wall' integrals (printDiagnostics order), 9 max |V|.
+// out[e*11 + q]: q = 0 int u dV, 1..8 the 'wall' integrals (printDiagnostics order), 9 max |V|, 10 int p dV.
 @kernel void diagReduce(const dlong Nelements,
                         const dlong fieldOffset,
                         @restrict const dfloat *Jw,
@@ -737,11 +737,11 @@ void ptoc(const std::string &tag) {
                         @restrict dfloat *out) {
 
   for(dlong e=0; e<Nelements; ++e; @outer(0)){
-    @shared dfloat s[10][p_Nq * p_Nq];
+    @shared dfloat s[11][p_Nq * p_Nq];
 
     for(int ij=0; ij<p_Nq*p_Nq; ++ij; @inner(0)){
-      dfloat a[10];
-      for(int q=0; q<10; ++q) a[q] = 0.0;
+      dfloat a[11];
+      for(int q=0; q<11; ++q) a[q] = 0.0;
       for(int k=0; k<p_Nq; ++k){
         const dlong id = e*p_Np + k*p_Nq*p_Nq + ij;
         const dfloat u = U[id], v = U[id + fieldOffset], w = U[id + 2*fieldOffset], p = P[id];
@@ -755,17 +755,18 @@ void ptoc(const std::string &tag) {
         a[7] += WwDz[id] * u;
         a[8] += WwDz[id] * v;
         a[9] = fmax(a[9], sqrt(u*u + v*v + w*w));
+        a[10] += Jw[id] * p;
       }
-      for(int q=0; q<10; ++q) s[q][ij] = a[q];
+      for(int q=0; q<11; ++q) s[q][ij] = a[q];
     }
 
     @barrier();  // nekRS builds with okl/add_barriers = false (platform.cpp)
 
     for(int ij=0; ij<p_Nq*p_Nq; ++ij; @inner(0)){
-      if (ij < 10) {
+      if (ij < 11) {
         dfloat r = s[ij][0];
         for(int m=1; m<p_Nq*p_Nq; ++m) r = (ij == 9) ? fmax(r, s[ij][m]) : r + s[ij][m];
-        out[e*10 + ij] = r;
+        out[e*11 + ij] = r;
       }
     }
   }
@@ -2320,7 +2321,7 @@ bool ciliaConverged(int iter) {
 // Both are exact spectral interpolation; each integral is one innerProd on the device.
 // ---------------------------------------------------------------------------
 occa::memory o_Wplane, o_WplaneDz, o_Wwall, o_WwallDz;
-dfloat planeArea = 0;
+dfloat planeArea = 0, wallArea = 0;
 
 void setupPlaneWeights(dfloat z0, occa::memory &o_W, occa::memory &o_WDz, dfloat &area) {
   auto mesh = nrs->meshV;
@@ -2373,14 +2374,14 @@ void setupPlaneWeights(dfloat z0, occa::memory &o_W, occa::memory &o_WDz, dfloat
 }
 
 // One 'vals' and one 'wall' line per call, on rank 0 (gate.py reads both).
-// one diagReduce kernel and one copy instead of 10 separate device reductions.
+// one diagReduce kernel and one copy instead of 11 separate device reductions.
 occa::memory o_diag;
 std::vector<dfloat> diagPartial;
 
 void printDiagnostics(double time) {
   auto mesh = nrs->meshV;
   auto comm = platform->comm.mpiComm();
-  const int nq = 10;
+  const int nq = 11, iMax = 9;   // diagReduce slots; iMax is a max, the rest are sums
 
   if (!o_diag.isInitialized()) {
     diagPartial.resize(mesh->Nelements * nq);
@@ -2390,22 +2391,25 @@ void printDiagnostics(double time) {
              o_Wplane, o_WplaneDz, o_Wwall, o_WwallDz, o_diag);
   o_diag.copyTo(diagPartial.data(), diagPartial.size() * sizeof(dfloat));
 
-  double sum[nq - 1] = {0}, vmax = 0;
+  double sum[nq] = {0}, vmax = 0;
   for (dlong e = 0; e < mesh->Nelements; ++e) {
-    for (int q = 0; q < nq - 1; ++q) sum[q] += diagPartial[e * nq + q];
-    vmax = std::max(vmax, (double)diagPartial[e * nq + nq - 1]);
+    for (int q = 0; q < nq; ++q) if (q != iMax) sum[q] += diagPartial[e * nq + q];
+    vmax = std::max(vmax, (double)diagPartial[e * nq + iMax]);
   }
-  MPI_Allreduce(MPI_IN_PLACE, sum, nq - 1, MPI_DOUBLE, MPI_SUM, comm);
+  MPI_Allreduce(MPI_IN_PLACE, sum, nq, MPI_DOUBLE, MPI_SUM, comm);
   MPI_Allreduce(MPI_IN_PLACE, &vmax, 1, MPI_DOUBLE, MPI_MAX, comm);
 
   const dfloat ubar = sum[0] / mesh->volume, Vmax = vmax;
-  // Plane integrals in code units (tau = du/dz, no mu)
-  const dfloat Iu = sum[1], Iv = sum[2], Ip = sum[3], Iudz = sum[4], Ivdz = sum[5];
-  const dfloat Ipw = sum[6], Iudzw = sum[7], Ivdzw = sum[8];
+  // Plane integrals in code units (tau = du/dz, no mu). Pressure is taken against its volume mean pbar: nekRS fixes the
+  // constant in p by an unweighted mean over the mesh nodes (removeMean, elliptic.cpp), which moves with the mesh, so a
+  // raw int p differs between meshes with the flow unchanged. int (p - pbar) dA = int p dA - A pbar does not.
+  const dfloat pbar = sum[10] / mesh->volume;
+  const dfloat Iu = sum[1], Iv = sum[2], Ip = sum[3] - planeArea * pbar, Iudz = sum[4], Ivdz = sum[5];
+  const dfloat Ipw = sum[6] - wallArea * pbar, Iudzw = sum[7], Ivdzw = sum[8];
 
   if (platform->comm.mpiRank() == 0) {
     printf("%.10e %.10e %.10e  vals\n", time, ubar, Vmax);
-    // time | z = wallPlaneZ: int u, int v, int p, int du/dz, int dv/dz | z = 0: int p, int du/dz, int dv/dz
+    // time | z = wallPlaneZ: int u, int v, int (p - pbar), int du/dz, int dv/dz | z = 0: int (p - pbar), int du/dz, int dv/dz
     printf("%.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e %.10e  wall\n",
            time, Iu, Iv, Ip, Iudz, Ivdz, Ipw, Iudzw, Ivdzw);
   }
@@ -2574,7 +2578,6 @@ void UDF_Setup() {
   }
   fixAlignedAvgNormals();
 
-  dfloat wallArea;
   setupPlaneWeights(wallPlaneZ, o_Wplane, o_WplaneDz, planeArea);
   setupPlaneWeights(0.0, o_Wwall, o_WwallDz, wallArea);
   if (profileCilia) {

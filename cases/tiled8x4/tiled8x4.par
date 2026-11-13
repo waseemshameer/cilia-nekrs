@@ -32,7 +32,7 @@ viscosity = -1.0e-3      # negative = Re; the cilia drag uses this mu = 1/Re too
 # Any key left out falls back to the value shown (the udf default).
 # nekRS lowercases values, so keep the coordinates filename lowercase.
 [CASEDATA]
-coordinatesFile      = coordinates_tiled2.txt # x_root y_root beta per cilium
+coordinatesFile      = coordinates_tiled8x4.txt # x_root y_root beta per cilium
 numPanels            = 40                # N_p; 40 (vs 80: ubar +0.12%, mean wall shear +0.38%; 20 gave +0.62%, +1.9%); 20 was used before with eps 0.1
 slenderness          = 20                # L/r -> C_par = 2pi/ln(L/r), C_perp = 2 C_par
 gaussianWidth        = 0.1               # epsilon; 0.1 with gauss2 beats gauss at 0.05 on every global metric at lower cost; a numerical width

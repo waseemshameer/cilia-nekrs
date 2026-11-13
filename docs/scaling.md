@@ -8,7 +8,9 @@ What this project does about nekRS scaling on GPUs, and why. Every setting below
 
 **Rule.** The developers' 2–5M per GPU (Min25 Conclusions) is only a starting guess. Production is sized by our own measured n0.8, the load at which parallel efficiency falls to 80%. A value from 8 GPUs or fewer is labelled small-P and optimistic, because Min25 Sec 4 says n0.8 is smaller at small n and P, and that neighbour communication doesn't saturate until P > 26. No load at scale is quoted until a run has gone past that, or says how far it got.
 
-**Measured so far.** One node, N_p = 40, steps 11–99 of each run. The runs to t = 0.1 were measured between v0.3 and v0.4, so they aren't release numbers; those are in [performance.md](performance.md). Efficiency is against the same case on 1 GPU.
+**Ladder.** Scaling runs use the tiled cases at 32 tiles per GPU: 128 cilia, 20,480 elements, 2.56M E·N³, close to the 2.4M where the one-node efficiency below was measured ([cases](case.md#tiled-cases)).
+
+**Measured so far.** On the 10 × 10 × 12-per-tile mesh used up to v0.4, so a case here carries 1.88× the elements it has today; elements and E·N³ per GPU are what count. One node, N_p = 40, steps 11–99 of each run. The runs to t = 0.1 were measured between v0.3 and v0.4, so they aren't release numbers; those are in [performance.md](performance.md). Efficiency is against the same case on 1 GPU.
 
 Host-staged gather-scatter (`NEKRS_GPU_MPI=0`), runs to t = 0.1:
 
