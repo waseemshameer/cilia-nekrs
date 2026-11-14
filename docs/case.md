@@ -15,19 +15,19 @@ Regenerate the layout and box with `python3 make_small4.py --seed 1`; the mesh i
 
 The `small4` cell repeated k × ky times: box k × ky × 1.5, 8k × 8ky × 10 elements, 4·k·ky cilia, same settings as `small4`. `python3 make_tiled.py --k K [--ky KY] --seed 1` writes the case (k = 1 reproduces `small4`); the mesh comes from the `.box` with `genbox`. A tiled run is the same flow as `small4` per unit area, so it can be gated against the `small4` reference with `gate.py <log> --per-area <tiles>`.
 
-The tiled cases form one ladder for weak and strong scaling, at 32 tiles (128 cilia, 20,480 elements, 2.56M E·N³) per GPU:
+The tiled cases form one ladder for weak and strong scaling, at 64 tiles (256 cilia, 40,960 elements, 5.12M E·N³) per GPU, the measured small-P n0.8 ([scaling](scaling.md#load-per-gpu)):
 
-| Case | cilia | elements | GPUs at 32 tiles each |
+| Case | cilia | elements | GPUs at 64 tiles each |
 |---|---|---|---|
-| `tiled8x4` | 128 | 20,480 | 1 |
-| `tiled8` | 256 | 40,960 | 2 |
-| `tiled16x8` | 512 | 81,920 | 4 |
-| `tiled16` | 1,024 | 163,840 | 8 |
-| `tiled32x16` | 2,048 | 327,680 | 16 |
-| `tiled32` | 4,096 | 655,360 | 32 |
-| `tiled64x32` | 8,192 | 1,310,720 | 64 |
+| `tiled8` | 256 | 40,960 | 1 |
+| `tiled16x8` | 512 | 81,920 | 2 |
+| `tiled16` | 1,024 | 163,840 | 4 |
+| `tiled32x16` | 2,048 | 327,680 | 8 |
+| `tiled32` | 4,096 | 655,360 | 16 |
+| `tiled64x32` | 8,192 | 1,310,720 | 32 |
+| `tiled64` | 16,384 | 2,621,440 | 64 |
 
-`tiled4` (64 cilia) stays for the GPU-less mock tests.
+`tiled8x4` (128 cilia) is the smallest multi-tile case on one GPU. `tiled4` (64 cilia) stays for the GPU-less mock tests.
 
 ## Mesh per tile
 

@@ -52,7 +52,7 @@ The CI badge only means the GPU-less checks passed. It says nothing about answer
 |---|---|
 | `cilia.udf` | The cilia model: beat kinematics, RFT drag, self-flow removal, spreading kernel, IQN coupling, diagnostics |
 | `cases/small4/` | Benchmark: 4 cilia in a periodic 1 × 1 × 1.5 box, 640 elements, N = 5, with the gate's reference |
-| `cases/tiled*/`, `cases/make_tiled.py` | `small4` tiled k × ky: the scaling ladder at 128 cilia per GPU ([cases](docs/case.md#tiled-cases)) |
+| `cases/tiled*/`, `cases/make_tiled.py` | `small4` tiled k × ky: the scaling ladder at 256 cilia per GPU ([cases](docs/case.md#tiled-cases)) |
 | `gate.py`, `NEKRS_VERSION` | Regression gate against the `small4` reference; the nekRS commit it requires |
 | `job_template.sh` | Example Slurm script; adapt it to your cluster. It has only run on one cluster |
 | `studies/` | Finished one-off analyses behind model choices; most need your own run logs |
