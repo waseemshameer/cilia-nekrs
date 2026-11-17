@@ -10,23 +10,24 @@ What this project does about nekRS scaling on GPUs, and why. Every setting below
 
 **Ladder.** Scaling runs use the tiled cases at 64 tiles per GPU: 256 cilia, 40,960 elements, 5.12M E·N³. That's at or just under the small-P n0.8 measured below, the load production would run at ([cases](case.md#tiled-cases)).
 
-**Measured.** Production mesh (8 × 8 × 10 per tile), N_p = 40, GPU-aware MPI on one node and across nodes, runs to t = 0.1, steps 11–99. These aren't release numbers; those are in [performance.md](performance.md). Efficiency is T₁ / (P · T_P) in seconds per coupling corrector, because the corrector count to t = 0.1 varies from run to run (417 to 523), so per step would mix solver work into the rank count. T₁ is the same case on 1 GPU where it fits, up to 15.36M (73 GB on one 80 GB A100). Above that, T₁ is the load times the 1-GPU rate, measured at 0.0531, 0.0521 and 0.0517 s per corrector per M E·N³ at 5.12M, 10.24M and 15.36M. The range takes that rate flat past 15.36M (upper) or still falling at its last measured slope (lower).
+**Measured.** Production mesh (8 × 8 × 10 per tile), N_p = 40, GPU-aware MPI on one node and across nodes, runs to t = 0.1, steps 11–99. The 16-GPU 5.12M point is steps 11–99 of the weak ladder's one-cycle run. These aren't release numbers; those are in [performance.md](performance.md). Efficiency is T₁ / (P · T_P) in seconds per coupling corrector, because the corrector count to t = 0.1 varies from run to run (417 to 523), so per step would mix solver work into the rank count. T₁ is the same case on 1 GPU where it fits, up to 15.36M (73 GB on one 80 GB A100). Above that, T₁ is the load times the 1-GPU rate, measured at 0.0531, 0.0521 and 0.0517 s per corrector per M E·N³ at 5.12M, 10.24M and 15.36M. The range takes that rate flat past 15.36M (upper) or still falling at its last measured slope (lower).
 
-| GPUs | nodes | 1.28M | 2.56M | 3.84M | 5.12M | 7.68M |
-|---|---|---|---|---|---|---|
-| 2 | 1 | – | 0.862 | – | 0.909 | – |
-| 4 | 1 | 0.664 | 0.771 | 0.788 | 0.807–0.827 | – |
-| 8 | 2 | 0.581 | 0.679–0.683 | – | 0.782–0.798 | 0.798–0.821 |
+| GPUs | nodes | 1.28M | 2.56M | 3.84M | 5.12M | 7.68M | 10.24M |
+|---|---|---|---|---|---|---|---|
+| 2 | 1 | – | 0.862 | – | 0.909 | – | – |
+| 4 | 1 | 0.664 | 0.771 | 0.788 | 0.807–0.827 | – | – |
+| 8 | 2 | 0.581 | 0.679–0.683 | – | 0.782–0.798 | 0.798–0.821 | – |
+| 16 | 4 | – | – | 0.665–0.715 | 0.656–0.729 | – | 0.640–0.826 |
 
-Columns are E·N³ per GPU; elements per GPU are E·N³ / 125, from 10,240 at 1.28M to 61,440 at 7.68M. The 4-GPU 5.12M range also spans two nodes.
+Columns are E·N³ per GPU; elements per GPU are E·N³ / 125, from 10,240 at 1.28M to 81,920 at 10.24M. The 4-GPU 5.12M range also spans two nodes. On 16 GPUs every case is 61M E·N³ or more, so the T₁ range is wide: at 10.24M it's 0.64–0.83 from `tiled64x32` alone. `tiled32x24` from 8 to 16 GPUs is 0.870 against its own 8-GPU time, 0.4833 to 0.2777 s per corrector, with ū the same to 6e-7.
 
 <p align="center"><img src="figures/scaling.png" width="600" alt="Parallel efficiency against load per GPU on 2, 4 and 8 A100s"></p>
 
-*Parallel efficiency against load per GPU, production mesh. Bars are the T₁ range where the case doesn't fit one GPU. The dashed line is 80%; the shaded spans on it are n0.8 for 4 and 8 GPUs. The dotted line is the scaling ladder's load.*
+*Parallel efficiency against load per GPU, production mesh, on 2 to 16 A100s. Bars are the T₁ range where the case doesn't fit one GPU. The dashed line is 80%; the shaded spans on it are n0.8 for 4 and 8 GPUs. On 16 GPUs n0.8 is above 5.12M and has no upper bound yet. The dotted line is the scaling ladder's load.*
 
 **Repeats.** On another node, `tiled16x8` on 1 and 4 GPUs repeats to 0.1% per corrector, with the same corrector count and ū; `tiled32x16` on 8 GPUs across two other nodes repeats to 0.4%. `tiled16` on 4 GPUs moved 1.9% with a different corrector count, so that run isn't bit-reproducible at 4 ranks. ū at t = 0.1 agrees across every run to 2e-6 relative.
 
-**n0.8, small-P:** 4.2–4.6M per GPU on 4 A100 on one node, 5.2–7.7M on 8 A100 across two nodes, and under 2.56M on 2 GPUs. Above about 4M per GPU the curve is flat (0.78–0.82), so n0.8 is a wide range on 8 GPUs even though each efficiency is tight. n0.8 rises with P, as Min25 Sec 4 says it does until P > 26, so no load at scale is quoted from these ([#16](https://github.com/waseemshameer/cilia-nekrs/issues/16)).
+**n0.8, small-P:** 4.2–4.6M per GPU on 4 A100 on one node, 5.2–7.7M on 8 A100 across two nodes, above 5.12M on 16 A100 across four nodes, and under 2.56M on 2 GPUs. Above about 4M per GPU the curve is flat (0.78–0.82), so n0.8 is a wide range on 8 GPUs even though each efficiency is tight. n0.8 rises with P, as Min25 Sec 4 says it does until P > 26, so no load at scale is quoted from these ([#16](https://github.com/waseemshameer/cilia-nekrs/issues/16), [#22](https://github.com/waseemshameer/cilia-nekrs/issues/22)). On 16 GPUs, 5.12M per GPU is 0.744 against the measured 1-GPU time at the same load (the weak ladder below), and 0.66–0.73 by T₁, so n0.8 is above it. The 10.24M range straddles 0.8, so it sets no upper bound. These studies stop at 16 GPUs for now, short of P = 26.
 
 Efficiency depends on P as well as load: at 2.56M per GPU it's 0.86 on 2 GPUs, 0.77 on 4 and 0.68 on 8. The 1-GPU rate changes only 3% from 5.12M to 15.36M, so the loss is in communication, not on the GPU. The cilia code isn't the limit either: on the 10 × 10 × 12 mesh, `addCiliaForce` was 2.30% of the solve for `tiled8` on 4 GPUs with GPU-aware MPI.
 
@@ -60,9 +61,25 @@ This check replaces an earlier one, ū within 1e-6 at t = 0.1, which couldn't so
 | gs autotune (`OOGS_MODE` unset), comm overlap on | Min25 Sec 1.4; `src/platform/ogs/oogs.cpp:559`; `src/lib/nekrs.cpp:78` |
 | `residualTol` 2e-3 velocity, 3e-3 pressure | 3e-3 for both passed the gate and was 1.25× for velocity and 1.13× for pressure against 1e-4. On the tiled cases, though, the inexact velocity solve adds coupling correctors in the hard phases of the beat. Velocity at 2e-3 takes `tiled8` on 4 GPUs from 4.41 to 3.68 correctors per step and 0.936× s/step, and still passes the gate (∫dv/dz L2 1.54e-4, L∞ 8.95e-4 of peak). 1e-3 cuts more correctors but each solve costs more: 0.973×. Tighter pressure doesn't cut correctors ([#18](https://github.com/waseemshameer/cilia-nekrs/issues/18)). The tolerance is scaled by √volume (`src/core/elliptic/elliptic.cpp:408`), so it means the same on any tile size |
 
-## Under test
+## Weak scaling
 
-**Load at scale.** The weak ladder at 5.12M per GPU, 1 to 64 GPUs, and strong scaling past 8 GPUs, to take n0.8 past P = 26 ([#10](https://github.com/waseemshameer/cilia-nekrs/issues/10)).
+The tiled ladder at 256 cilia (5.12M E·N³) per GPU, one beat cycle (1,000 steps), production settings, GPU-aware MPI, 4 GPUs per node ([#10](https://github.com/waseemshameer/cilia-nekrs/issues/10)). Cycle time is nekRS's `solve` timer. Setup is the rest: JIT load, mesh and partition. Cilia-cycles per GPU-hour = 256 × 3600 / time.
+
+| Case | GPUs | nodes | s/step | correctors/step | s/corrector | efficiency per step | efficiency per corrector | cilia-cycles per GPU-hour, stepping / with setup |
+|---|---|---|---|---|---|---|---|---|
+| `tiled8` | 1 | 1 | 0.703 | 3.55 | 0.198 | 1.00 | 1.00 | 1311 / 1022 |
+| `tiled16x8` | 2 | 1 | 0.834 | 3.90 | 0.214 | 0.84 | 0.93 | 1106 / 860 |
+| `tiled16` | 4 | 1 | 0.983 | 4.11 | 0.239 | 0.72 | 0.83 | 938 / 761 |
+| `tiled32x16` | 8 | 2 | 1.100 | 4.48 | 0.245 | 0.64 | 0.81 | 837 / 686 |
+| `tiled32` | 16 | 4 | 1.271 | 4.83 | 0.263 | 0.55 | 0.75 | 725 / 611 |
+
+No step hit the corrector cap. ū after one cycle agrees across all five to 1.5e-5 relative (2 GPUs is the worst; the rest are within 3.5e-6).
+
+On 16 GPUs a cilium-cycle costs 1.8× what it does on one. About half of that loss is the solver: s/corrector rises 1.33×, as communication grows. The other half is more coupling correctors per step in the bigger boxes, 3.55 to 4.83, the same rise with box size as on the 10 × 10 × 12 mesh. Setup is 200–240 s at every size, so it costs more per cycle on one GPU (22%) than on 16 (16%).
+
+Steps 11–99 of the 1- to 8-GPU runs agree with #16's strong-scaling runs of the same cases to 2% per corrector.
+
+**How far it got:** 16 GPUs on 4 nodes. 32 and 64 GPUs aren't run: the studies are capped at 16 GPUs for now, so nothing here is quoted as a load at scale (P > 26).
 
 ## Advice we checked and didn't adopt
 

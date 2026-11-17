@@ -34,10 +34,12 @@ SERIES = [
      [(1.28, 0.664, 0.664), (2.56, 0.771, 0.771), (3.84, 0.788, 0.788), (5.12, 0.807, 0.827)]),
     ("8 GPUs, 2 nodes", VERM, "^",
      [(1.28, 0.581, 0.581), (2.56, 0.679, 0.683), (5.12, 0.782, 0.798), (7.68, 0.798, 0.821)]),
+    ("16 GPUs, 4 nodes", GREEN, "D",
+     [(3.84, 0.665, 0.715), (5.12, 0.656, 0.729), (10.24, 0.640, 0.826)]),
 ]
 # n_0.8 ranges (millions per GPU) for P = 4 and P = 8
 N08 = {"4 GPUs, 1 node": (4.2, 4.6), "8 GPUs, 2 nodes": (5.2, 7.7)}
-TICKS = [1.28, 2.56, 3.84, 5.12, 7.68]
+TICKS = [1.28, 2.56, 3.84, 5.12, 7.68, 10.24]
 LADDER = 5.12
 
 # -------------------------------------------------------------------- figure
@@ -45,7 +47,7 @@ fig, ax = plt.subplots(figsize=(89 * MM, 62 * MM))
 fig.subplots_adjust(left=0.115, right=0.975, top=0.97, bottom=0.17)
 
 ax.set_xscale("log", base=2)
-ax.set_xlim(1.1, 9)
+ax.set_xlim(1.1, 12.5)
 ax.set_ylim(0.5, 1.0)
 ax.xaxis.set_major_locator(FixedLocator(TICKS))
 ax.xaxis.set_major_formatter(FixedFormatter([f"{t:g}" for t in TICKS]))
@@ -54,8 +56,8 @@ ax.set_yticks([0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
 
 ax.axhline(0.8, color=GREY, ls="--", lw=0.5, zorder=1)
 ax.text(1.12, 0.805, "80%", color=GREY, fontsize=6.5, ha="left", va="bottom")
-ax.axvline(LADDER, color=GREY, ls=":", lw=0.6, zorder=1)
-ax.text(LADDER * 1.02, 0.995, "ladder", color=GREY, fontsize=6.5, ha="left", va="top")
+ax.plot([LADDER, LADDER], [0.5, 0.855], color=GREY, ls=":", lw=0.6, zorder=1)  # stops under the legend
+ax.text(LADDER * 1.02, 0.508, "ladder", color=GREY, fontsize=6.5, ha="left", va="bottom")
 
 for lab, col, mk, pts in SERIES:
     if lab in N08:
@@ -77,9 +79,8 @@ ax.set_xlabel("Load per GPU, $E N^3$ (millions)")
 ax.set_ylabel("Parallel efficiency, $T_1 / (P\\,T_P)$")
 for s in ("top", "right"):
     ax.spines[s].set_visible(False)
-ax.legend(loc="lower right", frameon=False, handlelength=1.8, labelspacing=0.35)
+ax.legend(loc="upper right", frameon=False, handlelength=1.8, labelspacing=0.35)
 
 fig.savefig(OUT / "scaling.pdf")
 fig.savefig(OUT / "scaling.png", dpi=600)
-fig.savefig("/tmp/claude-1000/-home-waseemshameer-repos-cilia/ea270308-caf0-44f9-89e4-eb2ea5398d6e/scratchpad/scaling_prev.png", dpi=100)
 plt.close(fig)
