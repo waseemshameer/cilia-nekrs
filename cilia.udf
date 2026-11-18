@@ -2332,6 +2332,7 @@ void setupPlaneWeights(dfloat z0, occa::memory &o_W, occa::memory &o_WDz, dfloat
   std::vector<dfloat> l(Nq), dl(Nq);
   const dfloat tol = sizeof(dfloat) == sizeof(float) ? 1e-6 : 1e-8;  // float rounding of the check below reaches ~1e-7
   double a = 0;
+  dlong bad = -1;  // first local element that fails the layout check
   for (dlong e = 0; e < mesh->Nelements; ++e) {
     const dlong o = e * mesh->Np;
     const dfloat zmin = z[o], zmax = z[o + (Nq - 1) * Nq * Nq];
@@ -2342,10 +2343,11 @@ void setupPlaneWeights(dfloat z0, occa::memory &o_W, occa::memory &o_WDz, dfloat
       if (std::abs(x[o + n] - (x[o] + dx * (r[i] + 1) / 2)) > tol * (1 + std::abs(x[o])) ||
           std::abs(y[o + n] - (y[o] + dy * (r[j] + 1) / 2)) > tol * (1 + std::abs(y[o])) ||
           std::abs(z[o + n] - (zmin + dz * (r[k] + 1) / 2)) > tol * (1 + std::abs(zmin))) {
-        printf("[ERROR] wall integrals need axis-aligned genbox elements (element %d)\n", (int)e);
-        std::abort();
+        bad = e;
+        break;
       }
     }
+    if (bad >= 0) break;
     const dfloat r0 = 2 * (z0 - zmin) / dz - 1;
     for (int k = 0; k < Nq; ++k) {  // Lagrange basis l_k and its derivative at r0
       l[k] = 1; dl[k] = 0;
@@ -2365,6 +2367,11 @@ void setupPlaneWeights(dfloat z0, occa::memory &o_W, occa::memory &o_WDz, dfloat
       a += wxy * l[k];
     }
   }
+  if (bad >= 0)
+    printf("[ERROR] rank %d: element %d is not an axis-aligned genbox element\n", platform->comm.mpiRank(), (int)bad);
+  fflush(stdout);
+  nekrsCheck(bad >= 0, platform->comm.mpiComm(), EXIT_FAILURE, "%s\n",
+             "wall integrals need axis-aligned genbox elements");
   MPI_Allreduce(MPI_IN_PLACE, &a, 1, MPI_DOUBLE, MPI_SUM, platform->comm.mpiComm());
   area = a;
   o_W = platform->device.malloc(mesh->Nlocal * sizeof(dfloat));
@@ -2472,10 +2479,11 @@ void UDF_Setup() {
                "iqnCheck runs on 1 rank only (kinematicsCheck and binningCheck work on any number)");
   }
 
+  bool noCoordinates = false;  // only rank 0 reads the file; nekrsCheck sums the flag over all ranks
   if(rank == 0) {
     std::ifstream infile(coordinatesFile);
     if (!infile.good()) {
-        std::cerr << "\n[ERROR] " << coordinatesFile << " not found!\n" << std::endl;
+        noCoordinates = true;
     } else {
         // First three columns are x_root y_root beta; extra columns are ignored
         std::string line;
@@ -2490,6 +2498,9 @@ void UDF_Setup() {
         }
     }
   }
+
+  nekrsCheck(noCoordinates, platform->comm.mpiComm(), EXIT_FAILURE, "cannot open coordinatesFile '%s'\n",
+             coordinatesFile.c_str());
 
   MPI_Bcast(&N_cilia, 1, MPI_INT, 0, platform->comm.mpiComm());
   if(rank != 0) {
@@ -2514,10 +2525,9 @@ void UDF_Setup() {
   ymin = platform->linAlg->min(mesh->Nlocal, mesh->o_y, platform->comm.mpiComm());
   Lx = platform->linAlg->max(mesh->Nlocal, mesh->o_x, platform->comm.mpiComm()) - xmin;
   Ly = platform->linAlg->max(mesh->Nlocal, mesh->o_y, platform->comm.mpiComm()) - ymin;
-  if (2 * rcutFactor * epsilon >= std::min(Lx, Ly)) {
-    if (rank == 0) printf("[ERROR] r_cut must be below half the box for the minimum image\n");
-    std::abort();
-  }
+  nekrsCheck(2 * rcutFactor * epsilon >= std::min(Lx, Ly), platform->comm.mpiComm(), EXIT_FAILURE,
+             "r_cut = %g must be below half the box (%g) for the minimum image\n", rcutFactor * epsilon,
+             std::min(Lx, Ly) / 2);
 
   if (rank == 0) {
     printf("cilia: coordinatesFile = %s  (N_cilia = %d, N_part = %d)\n", coordinatesFile.c_str(), N_cilia, N_part);
@@ -2604,9 +2614,8 @@ void UDF_ExecuteStep(double time, int tstep) {
     ptoc("udfExecuteStep::diagnostics");
   }
 
-  // FORCE STEP 0 WRITE FIX:
-  // This explicitly creates 3d0.f00000 (with mesh coordinates) at t=0.
-  // It fixes the indexing gap and aligns your files with visnek's expectations.
+  // nekRS calls this once with tstep 0 before the first step and writes no checkpoint there itself;
+  // write the start state with mesh coordinates so the first field file holds the mesh.
   if (tstep == 0) {
     nrs->copyToNek(time, tstep);
     nek::userchk();
