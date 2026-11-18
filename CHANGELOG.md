@@ -9,6 +9,7 @@
 - The tiled cases are one scaling ladder at 256 cilia per GPU, the measured small-P n0.8 ([scaling](docs/scaling.md#load-per-gpu), [#16](https://github.com/waseemshameer/cilia-nekrs/issues/16)): new `tiled8x4` and `tiled16x8`, `make_tiled.py --ky` for k × ky boxes and `--mesh` for the elements per tile; `tiled2` removed ([cases](docs/case.md#tiled-cases)).
 - The `wall` line logs plane pressure against its volume mean, ∫(p − p̄), instead of ∫p. Raw ∫p carried nekRS's node-mean pressure constant, which moves with the mesh by about 1e-3 of ∫p, so meshes couldn't be compared on it. New reference ([why](docs/case.md#reference-run), [#17](https://github.com/waseemshameer/cilia-nekrs/issues/17)).
 - Velocity `residualTol` 3e-3 → 2e-3 in all case `.par` files; pressure stays at 3e-3. At 3e-3 the inexact velocity solve added coupling correctors in the hard phases of the beat on the tiled cases. `tiled8` correctors per step 4.41 → 3.68 ([why](docs/scaling.md#settings-we-keep), [#18](https://github.com/waseemshameer/cilia-nekrs/issues/18)).
+- Setup checks stop the run on every rank. A `coordinatesFile` that can't be opened now fails the run with its name (before, the run went on with no cilia), and the genbox-element and `rcutFactor` checks use `nekrsCheck` instead of `std::abort()` on some ranks ([#23](https://github.com/waseemshameer/cilia-nekrs/issues/23)).
 
 ## v0.4.0 (2026-11-06)
 
